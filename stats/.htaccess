@@ -1,0 +1,60 @@
+# Zabezpieczenia dla folderu stats
+
+# Ukryj pliki CSV i tymczasowe
+<Files "*.csv">
+    Order Allow,Deny
+    Deny from all
+</Files>
+
+<Files "*.tmp">
+    Order Allow,Deny
+    Deny from all
+</Files>
+
+# Ukryj pliki konfiguracyjne
+<Files ".htaccess">
+    Order Allow,Deny
+    Deny from all
+</Files>
+
+<Files "README.md">
+    Order Allow,Deny
+    Deny from all
+</Files>
+
+# Zabezpieczenie przed bezpośrednim dostępem do niektórych plików
+<Files "extension-stats-endpoint.php">
+    # Tylko POST requests
+    <RequireAll>
+        Require method POST
+    </RequireAll>
+</Files>
+
+# Ogranicz dostęp tylko do określonych plików
+<FilesMatch "^(stats-dashboard|stats-export|extension-stats-endpoint)\.php$">
+    Order Allow,Deny
+    Allow from all
+</FilesMatch>
+
+# Zablokuj wszystko inne
+<FilesMatch "^(?!(stats-dashboard|stats-export|extension-stats-endpoint)\.php$).*">
+    Order Allow,Deny
+    Deny from all
+</FilesMatch>
+
+# Zabezpieczenie przed listowaniem katalogów
+Options -Indexes
+
+# Zabezpieczenie przed niektórymi atakami
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    
+    # Blokuj podejrzane user agents
+    RewriteCond %{HTTP_USER_AGENT} ^$ [OR]
+    RewriteCond %{HTTP_USER_AGENT} (bot|crawler|spider) [NC]
+    RewriteRule ^stats-dashboard\.php$ - [F,L]
+    
+    # Blokuj bezpośredni dostęp do endpointu z przeglądarki
+    RewriteCond %{REQUEST_METHOD} ^GET$
+    RewriteRule ^extension-stats-endpoint\.php$ - [F,L]
+</IfModule>

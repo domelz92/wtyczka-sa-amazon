@@ -1,0 +1,1 @@
+# wtyczka-sa-amazon

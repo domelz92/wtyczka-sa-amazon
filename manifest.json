@@ -1,0 +1,45 @@
+{
+  "manifest_version": 3,
+  "name": "Wtyczka Amazon - Sellasist",
+  "version": "1.06",
+  "description": "Wtyczka do scrapowania zamówień z Amazon Seller Central i przesyłania ich do Sellasist.",
+  "permissions": [
+    "storage",
+    "tabs",
+    "scripting",
+    "sidePanel"
+  ],
+  "host_permissions": [
+    "https://*.sellasist.pl/*",
+    "https://sellercentral.amazon.com/*",
+    "https://sellercentral.amazon.de/*",
+    "https://sellercentral.amazon.co.uk/*",
+    "https://appsbusters.pl/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Amazon Sellasist Sync"
+  },
+  "side_panel": {
+    "default_path": "sidebar.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://sellercentral.amazon.com/*",
+        "https://sellercentral.amazon.de/*",
+        "https://sellercentral.amazon.co.uk/*"
+      ],
+      "js": ["content.js"]
+    }
+  ],
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  }
+}
+ 

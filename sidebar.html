@@ -1,0 +1,570 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8">
+  <title>Amazon Sellasist Sync</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      width: 100%;
+      max-width: 360px;
+      min-width: 280px;
+      max-width: 100vw;
+      margin: 0;
+      background: #f8f9fa;
+      border-radius: 8px;
+      border: 1px solid #e0e0e0;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+      display: flex;
+      flex-direction: column;
+      box-sizing: border-box;
+      padding: 0;
+      overflow: hidden;
+      height: 100vh;
+    }
+    @media (max-width: 340px) {
+      body {
+        font-size: 13px;
+        padding: 0;
+      }
+      .tab, button, .form-control, input[type=text] {
+        font-size: 12px;
+        padding: 4px 6px;
+      }
+    }
+    .tabs {
+      display: flex;
+      margin-bottom: 10px;
+      border-bottom: 2px solid #009244;
+    }
+    .tab {
+      flex: 1;
+      padding: 10px;
+      cursor: pointer;
+      background: #e9ecef;
+      text-align: center;
+      color: #009244;
+      font-weight: 500;
+      border-radius: 8px 8px 0 0;
+      border: 1px solid #e0e0e0;
+      border-bottom: none;
+      margin-right: 2px;
+      transition: background 0.2s, color 0.2s;
+      cursor: pointer;
+      outline: none;
+    }
+    .tab:active {
+      filter: brightness(0.95);
+    }
+    .tab.active {
+      background: #009244;
+      color: #fff;
+      font-weight: bold;
+      border-bottom: 2px solid #009244;
+    }
+    .tab-content {
+      display: none;
+      flex-direction: column;
+      flex: 1;
+      overflow: hidden;
+      background: #fff;
+      border-radius: 0 0 8px 8px;
+      border: 1px solid #e0e0e0;
+      border-top: none;
+      padding: 16px 12px 8px 12px;
+      min-height: 300px;
+    }
+    .tab-content.active {
+      display: flex;
+      flex: 1;
+    }
+    .log-container {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      overflow: hidden;
+    }
+    .log {
+      background: #f9f9f9;
+      border: 1px solid #ddd;
+      padding: 8px;
+      margin-top: 10px;
+      flex: 1;
+      overflow-y: auto;
+      font-size: 13px;
+      white-space: pre-wrap;
+      line-height: 1.4;
+      min-height: 120px;
+      max-height: none;
+      height: auto;
+    }
+    .log .error {
+      background: #ffeaea;
+      color: #d32f2f;
+      border-left: 4px solid #d32f2f;
+      padding-left: 6px;
+      margin-bottom: 2px;
+    }
+    .log .warning {
+      background: #fff8e1;
+      color: #f57c00;
+      border-left: 4px solid #f57c00;
+      padding-left: 6px;
+      margin-bottom: 2px;
+    }
+    .log .success {
+      background: #e8f5e9;
+      color: #388e3c;
+      border-left: 4px solid #388e3c;
+      padding-left: 6px;
+      margin-bottom: 2px;
+    }
+    .log .info {
+      background: #e3f2fd;
+      color: #1976d2;
+      border-left: 4px solid #1976d2;
+      padding-left: 6px;
+      margin-bottom: 2px;
+    }
+    .clear-logs-btn {
+      background: #e0e0e0;
+      color: #333;
+      border: none;
+      border-radius: 4px;
+      padding: 4px 12px;
+      font-size: 13px;
+      font-weight: 500;
+      margin: 8px auto 0 auto;
+      display: block;
+      cursor: pointer;
+      transition: background 0.2s;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+    }
+    .clear-logs-btn:hover {
+      background: #bdbdbd;
+    }
+    .status-bar {
+      margin-top: 10px;
+      padding: 5px;
+      background: #eee;
+      border: 1px solid #ddd;
+      font-size: 12px;
+    }
+    label {
+      display: block;
+      margin-top: 8px;
+    }
+    input[type=text] {
+      width: 100%;
+      padding: 4px;
+    }
+    button {
+      background: #009244;
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      padding: 8px 20px;
+      font-size: 15px;
+      font-weight: 500;
+      margin-top: 12px;
+      cursor: pointer;
+      transition: background 0.2s, box-shadow 0.2s;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+      outline: none;
+    }
+    button:active {
+      filter: brightness(0.95);
+    }
+    button:hover {
+      background: #007a36;
+    }
+    .error {
+      color: #d32f2f;
+    }
+    .success {
+      color: #388e3c;
+    }
+    .warning {
+      color: #f57c00;
+    }
+    .info {
+      color: #1976d2;
+    }
+    .button-group {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    .progress {
+      margin-top: 10px;
+      height: 20px;
+      background-color: #f5f5f5;
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    .progress-bar {
+      height: 100%;
+      background-color: #4caf50;
+      width: 0%;
+      transition: width 0.3s ease;
+    }
+    .order-details {
+      margin-top: 10px;
+      padding: 8px;
+      background: #f5f5f5;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+    }
+    .checkbox-container {
+      display: flex;
+      align-items: center;
+      margin-top: 12px;
+    }
+    .checkbox-container input[type=checkbox] {
+      margin-right: 8px;
+    }
+    .form-group label {
+      color: #009244;
+      font-weight: 500;
+    }
+    .form-control, input[type=text] {
+      border: 1px solid #ced4da;
+      border-radius: 4px;
+      padding: 6px 8px;
+      margin-top: 4px;
+      margin-bottom: 8px;
+      width: 100%;
+      font-size: 15px;
+    }
+    .footer {
+      background: #022c32;
+      color: #009244;
+      font-size: 14px;
+      border-top: 1px solid #e0e0e0;
+      border-radius: 0 0 8px 8px;
+      margin-top: auto;
+      padding: 10px 0 6px 0;
+      box-shadow: 0 -2px 8px rgba(0,0,0,0.04);
+    }
+    .footer a {
+      color: #009244;
+      text-decoration: none;
+      font-weight: bold;
+      transition: filter 0.2s;
+    }
+    .footer a:hover {
+      text-decoration: underline;
+      filter: brightness(1.2);
+    }
+    .footer img {
+      transition: filter 0.2s, transform 0.2s;
+    }
+    .footer img:hover {
+      filter: brightness(1.2) drop-shadow(0 2px 6px #00924444);
+      transform: scale(1.05);
+    }
+    .btn-stop {
+      background: #d32f2f !important;
+      color: #fff !important;
+      border: none;
+      font-weight: bold;
+      box-shadow: 0 2px 6px rgba(211,47,47,0.08);
+    }
+    #stop-processing {
+      display: none;
+    }
+    .btn {
+      background: #009244;
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      padding: 8px 20px;
+      font-size: 15px;
+      font-weight: 500;
+      margin-top: 12px;
+      cursor: pointer;
+      transition: background 0.2s, box-shadow 0.2s;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+      outline: none;
+    }
+    .btn:hover {
+      background: #007a36;
+    }
+    .btn:active {
+      filter: brightness(0.95);
+    }
+    .btn-secondary {
+      background: #6c757d;
+    }
+    .btn-secondary:hover {
+      background: #5a6268;
+    }
+    .btn-primary {
+      background: #009244;
+    }
+    .btn-primary:hover {
+      background: #007a36;
+    }
+    .setting-group {
+      margin-top: 12px;
+    }
+    .setting-group label {
+      display: flex;
+      align-items: center;
+      margin-top: 8px;
+    }
+    .setting-group input[type=checkbox] {
+      margin-right: 8px;
+    }
+  </style>
+</head>
+<body>
+  <div class="tabs">
+    <div class="tab active" id="tab-orders">Pobierz zamówienia</div>
+    <div class="tab" id="tab-settings">Ustawienia</div>
+    <div class="tab" id="tab-changelog">Changelog</div>
+  </div>
+  
+  <div class="tab-content active" id="content-orders">
+    <div class="button-group">
+      <button id="check-orders">Pobranie listy zamówień</button>
+      <button id="fetch-orders">Aktualizuj zamówienia w Sellasist</button>
+      <button id="continuous-mode-btn">Uruchom w trybie ciągłym</button>
+      <button id="stop-processing">Zatrzymaj przetwarzanie</button>
+    </div>
+    
+    <div class="order-details" id="current-order" style="display: none;">
+      <div>Przetwarzanie zamówienia: <span id="order-id">-</span></div>
+      <div>Status: <span id="order-status">-</span></div>
+    </div>
+    
+    <div class="progress">
+      <div class="progress-bar" id="progress-bar"></div>
+    </div>
+    
+    <div class="log-container">
+      <div class="log" id="orders-log"></div>
+      <button class="clear-logs-btn" id="clear-logs-btn">Wyczyść logi</button>
+      <div class="status-bar" id="status-bar">
+        <span id="continuous-indicator" style="display:none;vertical-align:middle;margin-right:6px;">
+          <span style="display:inline-block;width:10px;height:10px;background:#4caf50;border-radius:50%;box-shadow:0 0 4px #4caf50;"></span>
+        </span>
+        <span id="status-bar-text">Gotowy do pracy</span>
+      </div>
+    </div>
+  </div>
+  
+  <div class="tab-content" id="content-settings">
+    <div class="form-group">
+      <label for="apiKey">Klucz API:</label>
+      <input type="text" id="apiKey" class="form-control" placeholder="Wprowadź klucz API">
+    </div>
+    <div class="form-group">
+      <label for="apiEndpoint">Adres panelu Sellasist:</label>
+      <input type="text" id="apiEndpoint" class="form-control" placeholder="np. implemo.sellasist.pl">
+    </div>
+    <div class="checkbox-container">
+      <input type="checkbox" id="process-multiple-orders">
+      <label for="process-multiple-orders">Przetwarzaj wiele zamówień automatycznie</label>
+    </div>
+    <div class="setting-group">
+      <label for="skip-product-update">
+        <input type="checkbox" id="skip-product-update"> Nie aktualizuj produktów, tylko dane klienta
+      </label>
+    </div>
+    <div class="setting-group">
+      <label for="skip-product-prices">
+        <input type="checkbox" id="skip-product-prices"> Nie aktualizuj cen produktów, tylko szczegóły i dane kontaktowe
+      </label>
+    </div>
+    <div class="setting-group">
+      <label for="debugMode">
+        <input type="checkbox" id="debugMode"> Tryb debugowania (szczegółowe logi)
+      </label>
+    </div>
+    <div class="setting-group" style="text-align: center;">
+      <button id="save-settings" class="btn btn-primary">Zapisz ustawienia</button>
+      <div id="settings-msg" style="margin-top: 8px; font-size: 13px;"></div>
+    </div>
+
+    <div style="margin-top: 20px; flex:1 1 auto; min-height:0; height:100%; padding:18px 12px; background:#f8f9fa; border:1px solid #e0e0e0; border-radius:8px; overflow-y:auto;">
+      <h3 style="margin-top:0; color:#009244; font-size:18px; letter-spacing:0.5px;">INSTRUKCJA</h3>
+
+      <div style="margin-bottom:18px;">
+        <div style="font-weight:bold; color:#1976d2; font-size:15px; margin-bottom:6px;">Informacje ogólne</div>
+        <div style="background:#ffebee; border-left:5px solid #d32f2f; border-radius:6px; margin-bottom:10px; padding:7px 10px;">
+          <div style="font-weight:bold; color:#d32f2f; font-size:14px; margin-bottom:2px;">UWAGA!</div>
+          <div style="font-size:13px; color:#222;">
+            Warto za pierwszym razem uruchomić wtyczkę <b>bez opcji wielu zamówień</b> i sprawdzić, czy wszystko działa prawidłowo.
+          </div>
+        </div>
+        <div style="background:#e3f2fd; border-left:5px solid #1976d2; border-radius:6px; padding:7px 10px;">
+          <div style="font-weight:bold; color:#1976d2; font-size:14px; margin-bottom:2px;">Logowanie do Amazon</div>
+          <div style="font-size:13px; color:#222;">
+            Aby wtyczka działała, musisz być zalogowany w <b>Amazon Seller Central</b>.<br>
+            Jeśli nie będziesz zalogowany, wtyczka powiadomi Cię o tym.
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-bottom:18px;">
+        <div style="font-weight:bold; color:#009244; font-size:15px; margin-bottom:6px;">Konfiguracja</div>
+        <div style="background:#e8f5e9; border-left:5px solid #009244; border-radius:6px; margin-bottom:10px; padding:7px 10px;">
+          <div style="font-weight:bold; color:#009244; font-size:14px; margin-bottom:2px;">Skąd pobrać klucz API</div>
+          <div style="font-size:13px; color:#222;">
+            W swoim panelu Sellasist wejdź w <b>Integracje &gt; Klucze API</b> i kliknij <b>Dodaj klucz</b>.<br>
+            W polu <b>Wyświetlana nazwa</b> wpisz: <b>Wtyczka amazon</b>.<br>
+            Kliknij <b>Wygeneruj nowy</b> obok pola klucz API, skopiuj go i kliknij <b>Zapisz</b>.
+          </div>
+        </div>
+        <div style="background:#fff8e1; border-left:5px solid #f57c00; border-radius:6px; margin-bottom:10px; padding:7px 10px;">
+          <div style="font-weight:bold; color:#f57c00; font-size:14px; margin-bottom:2px;">Przetwarzaj wiele zamówień automatycznie</div>
+          <div style="font-size:13px; color:#222;">
+            Jeśli ta opcja jest włączona, po kliknięciu <b>Aktualizuj zamówienia w Sellasist</b> wtyczka automatycznie przetworzy wszystkie dostępne zamówienia jedno po drugim.<br>
+            Jeśli opcja jest wyłączona, przetwarzane będzie tylko jedno zamówienie na raz.
+          </div>
+        </div>
+        <div style="background:#f3e5f5; border-left:5px solid #8e24aa; border-radius:6px; padding:7px 10px;">
+          <div style="font-weight:bold; color:#8e24aa; font-size:14px; margin-bottom:2px;">Tryb debugowania</div>
+          <div style="font-size:13px; color:#222;">
+            Po włączeniu tej opcji w logach pojawią się dodatkowe szczegółowe informacje techniczne, przydatne do diagnozowania problemów.
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-bottom:18px;">
+        <div style="font-weight:bold; color:#1976d2; font-size:15px; margin-bottom:6px;">Działanie</div>
+        <div style="display:flex; flex-direction:column; gap:7px;">
+          <div style="background:#e3f2fd; border-left:5px solid #1976d2; border-radius:6px; padding:6px 9px;">
+            <div style="font-weight:bold; color:#1976d2; font-size:13px; margin-bottom:1px;">Pobranie listy zamówień</div>
+            <div style="font-size:12px; color:#222;">
+              Pobiera z API listę zamówień oczekujących na przetworzenie i wyświetla ich podsumowanie w logach. Nie aktualizuje zamówień w Sellasist.
+            </div>
+          </div>
+          <div style="background:#e8f5e9; border-left:5px solid #009244; border-radius:6px; padding:6px 9px;">
+            <div style="font-weight:bold; color:#009244; font-size:13px; margin-bottom:1px;">Aktualizuj zamówienia w Sellasist</div>
+            <div style="font-size:12px; color:#222;">
+              Rozpoczyna proces pobierania szczegółów i aktualizacji zamówień w Sellasist. W zależności od ustawień przetwarza jedno lub wszystkie zamówienia.
+            </div>
+          </div>
+          <div style="background:#fff8e1; border-left:5px solid #f57c00; border-radius:6px; padding:6px 9px;">
+            <div style="font-weight:bold; color:#f57c00; font-size:13px; margin-bottom:1px;">Uruchom w trybie ciągłym</div>
+            <div style="font-size:12px; color:#222;">
+              Włącza tryb automatycznego sprawdzania i odświeżania zamówień co 5 minut. W tym trybie zamówienia są sprawdzane i sesja Amazon odświeżana cyklicznie.
+            </div>
+          </div>
+          <div style="background:#ffebee; border-left:5px solid #d32f2f; border-radius:6px; padding:6px 9px;">
+            <div style="font-weight:bold; color:#d32f2f; font-size:13px; margin-bottom:1px;">Zatrzymaj przetwarzanie</div>
+            <div style="font-size:12px; color:#222;">
+              Przerywa aktualnie trwające przetwarzanie zamówień oraz wyłącza tryb ciągły, jeśli był aktywny.
+            </div>
+          </div>
+          <div style="background:#f5f5f5; border-left:5px solid #888; border-radius:6px; padding:6px 9px;">
+            <div style="font-weight:bold; color:#555; font-size:13px; margin-bottom:1px;">Wyczyść logi</div>
+            <div style="font-size:12px; color:#222;">
+              Czyści wszystkie komunikaty z logów, pozostawiając okno logów puste.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style="background:#e8f5e9; border-left:5px solid #009244; border-radius:6px; padding:5px 8px; margin-bottom:0;">
+        <div style="font-weight:bold; color:#009244; font-size:13px; margin-bottom:1px;">Wsparcie techniczne</div>
+        <div style="font-size:12px; color:#222;">
+          Wszelkie problemy zgłaszaj na adres: <a href="mailto:kontakt@appsbusters.pl" style="color:#009244; font-weight:bold;">kontakt@appsbusters.pl</a>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <div class="tab-content" id="content-changelog">
+    <div style="padding: 12px 8px;">
+      <div style="text-align: center; margin-bottom: 16px;">
+        <button id="check-updates-btn" class="btn btn-secondary">Sprawdź aktualizacje</button>
+        <div id="update-status" style="margin-top: 8px; font-size: 13px;"></div>
+      </div>
+      
+      <h3 style="margin-top:0; color:#009244; font-size:18px; letter-spacing:0.5px;">Changelog</h3>
+      
+      <div style="margin-bottom:16px; padding:12px; background:#f8f9fa; border-radius:6px; border-left:4px solid #009244;">
+        <div style="font-weight:bold; color:#009244; font-size:16px; margin-bottom:4px;">Wersja 1.06</div>
+        <div style="color:#666; font-size:13px; margin-bottom:8px;">28.08.2025</div>
+        <ul style="margin:8px 0 0 18px; padding:0; font-size:14px; color:#222;">
+          <li>Poprawiono wykrywanie krajów - teraz działa z każdym panelem Sellasist</li>
+          <li>Naprawiono aktualizację cen i stawek VAT produktów</li>
+          <li>Zwiększono stabilność wtyczki - mniej błędów</li>
+          <li>Przyspieszona praca wtyczki</li>
+        </ul>
+      </div>
+      
+      <div style="margin-bottom:16px; padding:12px; background:#f8f9fa; border-radius:6px; border-left:4px solid #1976d2;">
+        <div style="font-weight:bold; color:#1976d2; font-size:16px; margin-bottom:4px;">Wersja 1.05</div>
+        <div style="color:#666; font-size:13px; margin-bottom:8px;">10.07.2025</div>
+        <ul style="margin:8px 0 0 18px; padding:0; font-size:14px; color:#222;">
+          <li>Dodano opcję nieaktualizowania cen produktów (tylko szczegóły i dane kontaktowe)</li>
+          <li>Poprawiono logikę wyliczania ceny produktu (nie dolicza kosztów wysyłki)</li>
+          <li>Dodano opcję nieaktualizowania produktów (tylko dane klienta)</li>
+          <li>Poprawiono obsługę numerów telefonów z prefiksem kraju</li>
+        </ul>
+      </div>
+      
+      <div style="margin-bottom:16px; padding:12px; background:#f8f9fa; border-radius:6px; border-left:4px solid #009244;">
+        <div style="font-weight:bold; color:#009244; font-size:16px; margin-bottom:4px;">Wersja 1.04</div>
+        <div style="color:#666; font-size:13px; margin-bottom:8px;">1.07.2025</div>
+        <ul style="margin:8px 0 0 18px; padding:0; font-size:14px; color:#222;">
+          <li>Poprawiono obsługę walut</li>
+        </ul>
+      </div>
+      
+      <div style="margin-bottom:16px; padding:12px; background:#f8f9fa; border-radius:6px; border-left:4px solid #009244;">
+        <div style="font-weight:bold; color:#009244; font-size:16px; margin-bottom:4px;">Wersja 1.03</div>
+        <div style="color:#666; font-size:13px; margin-bottom:8px;">25.06.2025</div>
+        <ul style="margin:8px 0 0 18px; padding:0; font-size:14px; color:#222;">
+          <li>Dodano obsługę kosztów wysyłki</li>
+          <li>Dodano system automatycznego sprawdzania aktualizacji</li>
+          <li>Dodano powiadomienia o nowych wersjach wtyczki</li>
+          <li>Dodano przycisk ręcznego sprawdzania aktualizacji</li>
+          <li>Poprawiono obsługę błędów połączenia z serwerem</li>
+        </ul>
+      </div>
+      
+      <div style="margin-bottom:16px; padding:12px; background:#f8f9fa; border-radius:6px; border-left:4px solid #1976d2;">
+        <div style="font-weight:bold; color:#1976d2; font-size:16px; margin-bottom:4px;">Wersja 1.02</div>
+        <div style="color:#666; font-size:13px; margin-bottom:8px;">16.05.2025</div>
+        <ul style="margin:8px 0 0 18px; padding:0; font-size:14px; color:#222;">
+          <li>Poprawiono obliczanie ceny jednostkowej produktów (uwzględnienie kosztów wysyłki)</li>
+          <li>Dodano obsługę numeru telefonu w adresie dostawy</li>
+          <li>Poprawiono rozpoznawanie imienia i nazwiska w różnych formatach</li>
+          <li>Dodano formatowanie numeru telefonu (usuwanie znaków specjalnych)</li>
+          <li>Poprawiono obsługę adresu panelu (usuwanie https://)</li>
+          <li>Dodano lepszą walidację adresu API</li>
+          <li>Rozszerzono logowanie o dodatkowe informacje</li>
+        </ul>
+      </div>
+      
+      <div style="margin-bottom:16px; padding:12px; background:#f8f9fa; border-radius:6px; border-left:4px solid #f57c00;">
+        <div style="font-weight:bold; color:#f57c00; font-size:16px; margin-bottom:4px;">Wersja 1.01</div>
+        <div style="color:#666; font-size:13px; margin-bottom:8px;">15.05.2025</div>
+        <ul style="margin:8px 0 0 18px; padding:0; font-size:14px; color:#222;">
+          <li>Naprawiono błąd: w trybie ciągłym zamówienia są teraz automatycznie pobierane i aktualizowane co 5 minut</li>
+          <li>Zmieniono domyślny numer telefonu na 000000000 (wcześniej było ---)</li>
+          <li>Dodano zakładkę Changelog w sidebarze</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+  
+  <script src="sidebar.js"></script>
+  <footer class="footer mt-auto py-2 text-center">
+    <div style="display: flex; flex-direction: column; align-items: center;">
+      <a href="https://appsbusters.pl/amazon-sellasist-sync/" target="_blank" style="color:#009244; font-weight:bold; text-decoration:none; display: flex; flex-direction: column; align-items: center;">
+        <div id="new-version-info" style="color:#d32f2f; font-weight:bold; font-size:13px; margin-bottom:2px; display:none;">Dostępna nowa wersja!</div>
+        <span style="font-size: 15px; font-weight: bold;">by AppsBusters</span>
+        <img src="https://appsbusters.pl/wp-content/uploads/2024/10/logo-appbusters-na-ciemnym.svg" alt="AppsBusters logo" style="width:160px; margin-top: 8px; display: block;" />
+        <span style="font-size:12px; color:#888; margin-top:6px;" id="footer-version">Wersja ...</span>
+      </a>
+    </div>
+  </footer>
+</body>
+</html> 
