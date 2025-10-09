@@ -22,6 +22,8 @@ Object.keys(globalVars).forEach(key => {
   }
 });
 
+// Cache dla zamówień Pending przeniesiony do sidebar.js
+
 // Pobierz debugMode z chrome.storage.local przy starcie
 chrome.storage.local.get(['debugMode'], function(result) {
   window.debugMode = !!result.debugMode;
@@ -47,7 +49,17 @@ async function sendDailyUsageStats() {
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   try {
-    if (msg.type === 'scrapOrder') {
+    if (msg.type === 'preloadCountries') {
+      // Preloaduj kraje do cache
+      fetchCountriesFromAPI(msg.apiKey, msg.apiEndpoint).then(countries => {
+        const count = countries ? countries.length : 0;
+        sendResponse({ success: !!countries, count: count });
+      }).catch(error => {
+        sendResponse({ success: false, error: error.message });
+      });
+      return true;
+    }
+    else if (msg.type === 'scrapOrder') {
     // Sprawdź duplikat na podstawie timestampu i ID zamówienia
     const currentTime = Date.now();
     const isDuplicate = window.isProcessingOrder && 
@@ -162,12 +174,150 @@ function getValidPhoneNumber(scrapedPhone, existingPhone, country) {
 // Funkcja do generowania domyślnego numeru telefonu - zoptymalizowana
 const generateDefaultPhone = () => '000000000';
 
+// Funkcja do sprawdzania czy zamówienie jest Pending na Amazon
+function isOrderPendingOnAmazon(orderId) {
+  try {
+    // Sprawdź różne wskaźniki zamówienia Pending na stronie Amazon
+    const pageText = document.body.innerText || document.body.textContent || '';
+    
+    // Szukaj statusu "Pending" w tekście
+    const pendingIndicators = [
+      'Pending',
+      'pending',
+      'Awaiting payment',
+      'Payment pending',
+      'Unshipped',
+      'Not yet shipped',
+      'Processing',
+      'Nie wysłano',
+      'Oczekuje na płatność',
+      'W trakcie przetwarzania'
+    ];
+    
+    const hasPendingStatus = pendingIndicators.some(indicator => 
+      pageText.toLowerCase().includes(indicator.toLowerCase())
+    );
+    
+    // 2. Sprawdź czy brak danych adresowych (typowe dla Pending)
+    const addressDiv = findAddressElement();
+    if (!addressDiv) {
+      sendLog('Brak elementu adresowego - możliwe zamówienie Pending', 'debug');
+      addToPendingCache(orderId);
+      return true;
+    }
+    
+    const addressData = extractAddressData(addressDiv);
+    if (!addressData.isValid || !addressData.name || !addressData.surname) {
+      sendLog('Niepełne dane adresowe - możliwe zamówienie Pending', 'debug');
+      addToPendingCache(orderId);
+      return true;
+    }
+    
+    // 4. Sprawdź czy produkty mają status "Pending" (ale NIE "Cancelled")
+    const productRows = document.querySelectorAll('table.a-keyvalue tbody tr');
+    if (productRows && productRows.length > 0) {
+      let hasPendingProducts = false;
+      let hasCancelledProducts = false;
+      
+      for (const row of productRows) {
+        const statusLabel = row.querySelector('[data-test-id="item-status-label"]');
+        if (statusLabel) {
+          const status = statusLabel.innerText.trim().toLowerCase();
+          
+          if (status.includes('cancelled') || status.includes('canceled')) {
+            hasCancelledProducts = true;
+            sendLog(`Znaleziono produkt anulowany: ${status}`, 'debug');
+          } else if (status.includes('pending') || status.includes('unshipped')) {
+            hasPendingProducts = true;
+            sendLog(`Znaleziono produkt ze statusem Pending: ${status}`, 'debug');
+          }
+        }
+      }
+      
+      // Jeśli są produkty anulowane, NIE dodawaj do cache Pending - przetwórz jako anulowane
+      if (hasCancelledProducts) {
+        sendLog('Zamówienie zawiera produkty anulowane - będzie przetworzone jako anulowane', 'info');
+        return false; // NIE jest Pending - przetwórz jako anulowane
+      }
+      
+      // Jeśli są tylko produkty Pending (bez anulowanych), dodaj do cache
+      if (hasPendingProducts) {
+        addToPendingCache(orderId);
+        return true;
+      }
+    }
+    
+    if (hasPendingStatus) {
+      sendLog('Wykryto wskaźniki zamówienia Pending w tekście strony', 'debug');
+      addToPendingCache(orderId);
+      return true;
+    }
+    
+    return false;
+  } catch (error) {
+    sendLog(`Błąd sprawdzania statusu Pending: ${error.message}`, 'error');
+    return false; // W przypadku błędu, kontynuuj przetwarzanie
+  }
+}
+
+// Funkcja do dodawania zamówienia do cache Pending - wysyła do sidebar
+function addToPendingCache(orderId) {
+  // Wyślij wiadomość do sidebar żeby dodał do cache
+  chrome.runtime.sendMessage({ 
+    type: 'addToPendingCache', 
+    orderId: orderId 
+  });
+  sendLog(`Wysłano żądanie dodania zamówienia ${orderId} do cache Pending`, 'debug');
+}
+
+// Cache Pending przeniesiony do sidebar.js
+
+// Funkcja do preloadowania krajów na początku sesji
+async function preloadCountriesCache() {
+  try {
+    // Sprawdź czy już mamy cache
+    if (window.countriesCache && window.cacheTimestamp) {
+      const hoursLeft = Math.round((window.CACHE_DURATION - (Date.now() - window.cacheTimestamp)) / 1000 / 60 / 60);
+      sendLog(`Cache krajów już istnieje (${window.countriesCache.length} krajów, ważny jeszcze ${hoursLeft}h)`, 'debug');
+      return;
+    }
+
+    // Pobierz konfigurację API z storage
+    const { apiKey, apiEndpoint } = await getStoredData(['apiKey', 'apiEndpoint']);
+    if (!apiKey || !apiEndpoint) {
+      sendLog('Brak konfiguracji API - nie można preloadować krajów', 'debug');
+      return;
+    }
+
+    // Preloaduj kraje w tle
+    sendLog('Preloadowanie krajów z API w tle...', 'debug');
+    await fetchCountriesFromAPI(apiKey, apiEndpoint);
+    
+  } catch (error) {
+    sendLog(`Błąd preloadowania krajów: ${error.message}`, 'warning');
+  }
+}
+
 // Funkcja do scrapowania i aktualizacji zamówienia
 
 async function scrapAndUpdateOrder(msg) {
   try {
     sendLog(`Scrapowanie zamówienia: ${msg.order?.amazon_order_id}`, 'debug');
     await new Promise(resolve => setTimeout(resolve, 500));
+    
+    // NOWE: Sprawdź czy zamówienie jest Pending na Amazon
+    const isPending = isOrderPendingOnAmazon(msg.order?.amazon_order_id);
+    if (isPending) {
+      sendLog(`Zamówienie ${msg.order?.amazon_order_id} jest Pending na Amazon - PRZERYWAM PRZETWARZANIE`, 'warning');
+      // Wyślij informację o pominięciu zamówienia
+      chrome.runtime.sendMessage({ 
+        type: 'orderSkipped', 
+        orderId: msg.order?.sellasist_order_id,
+        reason: 'Pending'
+      });
+      return; // PRZERWIJ przetwarzanie
+    }
+    
     let allProductsCancelled = false;
     if (!msg.orderDetails) {
       sendLog(`Błąd: Brak szczegółów zamówienia z Sellasist`, 'error');
@@ -196,6 +346,8 @@ async function scrapAndUpdateOrder(msg) {
       return;
     }
     const addressData = extractAddressData(addressDiv);
+    let orderStatus = 'normal'; // normal, pending, cancelled, error
+    
     if (!addressData.isValid) {
       sendLog('Niepełne dane adresowe – aktualizuję zamówienie jako anulowane: imię=Order, nazwisko=Canceled', 'warning');
       allProductsCancelled = true;
@@ -211,13 +363,39 @@ async function scrapAndUpdateOrder(msg) {
 
     const scrapedCurrency = detectCurrency();
     let currency = scrapedCurrency || paymentCurrency || 'EUR';
-    currency = normalizeCurrency(currency);
+    
+    try {
+      currency = normalizeCurrency(currency);
+    } catch (currencyError) {
+      sendLog(`Błąd waluty: ${currencyError.message}`, 'error');
+      sendOrderError(msg.order?.sellasist_order_id, `Nieobsługiwana waluta: ${currency}`);
+      return;
+    }
+    
     sendLog(`Waluta z scraping Amazona: ${scrapedCurrency}`, 'debug');
     sendLog(`Waluta z płatności Sellasist: ${paymentCurrency}`, 'debug');
     sendLog(`Wykryta waluta zamówienia: ${currency}`, 'debug');
-    const productData = extractProductData();
+    // Sprawdź czy to zamówienie UK i czy włączona jest opcja UK VAT 0%
+    const { ukVatZero } = await getStoredData(['ukVatZero']);
+    const isUK = isUKOrder(addressData, currency);
+    const useUkVatZero = ukVatZero && isUK;
+    
+    const productData = extractProductData(useUkVatZero);
     if (!allProductsCancelled) {
-      allProductsCancelled = productData.products.length === 0 || productData.products.every(p => p.status && p.status.toLowerCase().includes('cancelled'));
+      const hasRealCancelledProducts = productData.products.length > 0 && 
+                                      productData.products.every(p => p.status && p.status.toLowerCase().includes('cancelled'));
+      const hasNoProducts = productData.products.length === 0;
+      
+      if (hasRealCancelledProducts) {
+        allProductsCancelled = true;
+        orderStatus = 'cancelled';
+        sendLog('Wszystkie produkty w zamówieniu mają status anulowany', 'warning');
+      } else if (hasNoProducts && orderStatus === 'normal') {
+        // Brak produktów, ale normalne dane adresowe - może być zamówienie w toku
+        allProductsCancelled = true;
+        orderStatus = 'pending';
+        sendLog('Brak produktów - prawdopodobnie zamówienie w toku', 'info');
+      }
     }
     if (productData.products.length === 0) {
       sendLog(`Ostrzeżenie: Nie znaleziono produktów dla zamówienia ${msg.order?.amazon_order_id || 'nieznane'}`, 'warning');
@@ -227,6 +405,25 @@ async function scrapAndUpdateOrder(msg) {
     if (window.debugMode) sendLog(`Znaleziono ${productData.products.length} produktów`, 'debug');
     const orderValues = extractOrderValues();
     if (window.debugMode) sendLog(`Wartości zamówienia z scraping: ${JSON.stringify(orderValues)}`, 'debug');
+    
+    if (useUkVatZero) {
+      sendLog('Opcja UK VAT 0% jest włączona i wykryto zamówienie do UK - używam cen netto', 'info');
+      
+      // Dla UK VAT 0% używamy "Sales proceeds net of VAT" jako wartości produktów i wysyłki
+      if (orderValues.netProceeds !== null && orderValues.netProceeds > 0) {
+        // Znajdź wartość netto produktów i wysyłki z "Sales proceeds net of VAT"
+        const netProceedsTotal = orderValues.netProceeds;
+        sendLog(`UK VAT 0%: Używam "Sales proceeds net of VAT" jako podstawy: ${netProceedsTotal} ${currency}`, 'info');
+        
+        // Zastąp wartości zamówienia wartościami netto
+        orderValues.subtotal = netProceedsTotal - (orderValues.shippingNet || 0);
+        orderValues.total = netProceedsTotal;
+        orderValues.tax = 0; // VAT = 0% dla UK
+        orderValues.shipping = orderValues.shippingNet || 0;
+        
+        sendLog(`UK VAT 0%: Przeliczone wartości - produkty netto: ${orderValues.subtotal}, wysyłka netto: ${orderValues.shipping}, razem netto: ${orderValues.total}`, 'info');
+      }
+    }
     if ((orderValues.subtotal === null || orderValues.subtotal === 0) && paymentAmount > 0) {
       orderValues.total = paymentAmount;
       if (productData.products.length === 1 && productData.products[0].tax_rate > 0) {
@@ -241,22 +438,41 @@ async function scrapAndUpdateOrder(msg) {
       const shippingCost = orderValues.shipping || msg.orderDetails.shipment?.total || 0;
       let baseAmount = null;
       let baseLabel = '';
-      if (orderValues.total !== null && orderValues.total > 0) {
-        baseAmount = orderValues.total;
-        baseLabel = 'orderValues.total';
-      } else if (orderValues.subtotal !== null && orderValues.subtotal > 0) {
+      let shouldSubtractShipping = true;
+      
+      // Priorytet 1: subtotal (wartość produktów netto) - NIE odejmuj wysyłki
+      if (orderValues.subtotal !== null && orderValues.subtotal > 0) {
         baseAmount = orderValues.subtotal;
         baseLabel = 'orderValues.subtotal';
-      } else if (paymentAmount > 0) {
+        shouldSubtractShipping = false; // subtotal to już wartość samych produktów
+      } 
+      // Priorytet 2: total (suma brutto) - odejmij wysyłkę
+      else if (orderValues.total !== null && orderValues.total > 0) {
+        baseAmount = orderValues.total;
+        baseLabel = 'orderValues.total';
+        shouldSubtractShipping = true;
+      } 
+      // Priorytet 3: paymentAmount - odejmij wysyłkę
+      else if (paymentAmount > 0) {
         baseAmount = paymentAmount;
         baseLabel = 'paymentAmount';
+        shouldSubtractShipping = true;
       }
+      
       if (baseAmount !== null) {
-        const productsTotal = baseAmount - shippingCost;
         const quantity = productData.products[0].quantity || 1;
-        const unitPrice = productsTotal / quantity;
+        let unitPrice;
+        
+        if (shouldSubtractShipping) {
+          const productsTotal = baseAmount - shippingCost;
+          unitPrice = productsTotal / quantity;
+          sendLog(`Ustawiono cenę jednostkową produktu: (${baseLabel}=${baseAmount} - shippingCost=${shippingCost}) / quantity=${quantity} = ${unitPrice}`, 'debug');
+        } else {
+          unitPrice = baseAmount / quantity;
+          sendLog(`Ustawiono cenę jednostkową produktu: ${baseLabel}=${baseAmount} / quantity=${quantity} = ${unitPrice} (subtotal nie zawiera kosztów wysyłki)`, 'debug');
+        }
+        
         productData.products[0].price = unitPrice;
-        sendLog(`Ustawiono cenę jednostkową produktu: (${baseLabel}=${baseAmount} - shippingCost=${shippingCost}) / quantity=${quantity} = ${unitPrice}`, 'debug');
       } else {
         sendLog('Nie można wyliczyć ceny produktu: brak sumy zamówienia, subtotalu i kwoty płatności', 'warning');
       }
@@ -348,7 +564,7 @@ async function scrapAndUpdateOrder(msg) {
         comment: msg.orderDetails.comment,
         bill_address: {
           name: allProductsCancelled ? 'Order' : (addressData.name || msg.orderDetails.bill_address?.name || '-'),
-          surname: allProductsCancelled ? 'Canceled' : (addressData.surname || msg.orderDetails.bill_address?.surname || '-'),
+          surname: allProductsCancelled ? getOrderStatusSurname(orderStatus) : (addressData.surname || msg.orderDetails.bill_address?.surname || '-'),
           street: addressData.street || msg.orderDetails.bill_address?.street || '-',
           home_number: addressData.homeNumber || msg.orderDetails.bill_address?.home_number || '',
           flat_number: msg.orderDetails.bill_address?.flat_number || null,
@@ -367,7 +583,7 @@ async function scrapAndUpdateOrder(msg) {
         },
         shipment_address: {
           name: allProductsCancelled ? 'Order' : (addressData.name || msg.orderDetails.shipment_address?.name || '-'),
-          surname: allProductsCancelled ? 'Canceled' : (addressData.surname || msg.orderDetails.shipment_address?.surname || '-'),
+          surname: allProductsCancelled ? getOrderStatusSurname(orderStatus) : (addressData.surname || msg.orderDetails.shipment_address?.surname || '-'),
           street: addressData.street || msg.orderDetails.shipment_address?.street || '-',
           home_number: addressData.homeNumber || msg.orderDetails.shipment_address?.home_number || '',
           flat_number: msg.orderDetails.shipment_address?.flat_number || null,
@@ -387,20 +603,48 @@ async function scrapAndUpdateOrder(msg) {
         pickup_point: msg.orderDetails.pickup_point || null,
         additional_fields: msg.orderDetails.additional_fields || [],
         // Produkty aktualizujemy w tym samym zapytaniu przez carts
+        // POPRAWIONE MAPOWANIE - lepsze dopasowanie produktów
         carts: productData.products.map((scrapedProduct, index) => {
-          const originalProduct = msg.orderDetails.carts?.find(cart =>
-            cart.name === scrapedProduct.name ||
-            cart.ean === scrapedProduct.ean ||
-            cart.catalog_number === scrapedProduct.catalog_number
-          ) || (msg.orderDetails.carts && msg.orderDetails.carts[index]);
+          // Najpierw spróbuj znaleźć po nazwie/SKU/ASIN
+          let originalProduct = msg.orderDetails.carts?.find(cart => {
+            // Dokładne dopasowanie po nazwie
+            if (cart.name && scrapedProduct.name && cart.name.trim() === scrapedProduct.name.trim()) {
+              sendLog(`Dopasowano produkt po nazwie: ${cart.name}`, 'debug');
+              return true;
+            }
+            
+            // Dopasowanie po EAN/SKU
+            if (cart.ean && scrapedProduct.ean && cart.ean === scrapedProduct.ean) {
+              sendLog(`Dopasowano produkt po EAN: ${cart.ean}`, 'debug');
+              return true;
+            }
+            
+            // Dopasowanie po catalog_number/ASIN
+            if (cart.catalog_number && scrapedProduct.catalog_number && 
+                cart.catalog_number === scrapedProduct.catalog_number) {
+              sendLog(`Dopasowano produkt po catalog_number: ${cart.catalog_number}`, 'debug');
+              return true;
+            }
+            
+            return false;
+          });
+          
+          // Jeśli nie znaleziono po identyfikatorach, użyj po indeksie (ale z ostrzeżeniem)
+          if (!originalProduct && msg.orderDetails.carts && msg.orderDetails.carts[index]) {
+            originalProduct = msg.orderDetails.carts[index];
+            sendLog(`UWAGA: Nie znaleziono dokładnego dopasowania dla produktu "${scrapedProduct.name}", używam produktu po indeksie ${index}: "${originalProduct.name}"`, 'warning');
+          }
 
           if (originalProduct && originalProduct.line_id) {
+            sendLog(`Aktualizuję line_id: ${originalProduct.line_id} -> cena: ${scrapedProduct.price}, tax: ${scrapedProduct.tax_rate}%`, 'info');
             return {
               line_id: originalProduct.line_id,
-              price: scrapedProduct.price,  // Dodaj cenę produktu
-              tax: scrapedProduct.tax_rate || 0  // Użyj tax w carts
+              price: scrapedProduct.price,
+              tax: scrapedProduct.tax_rate || 0
             };
           }
+          
+          sendLog(`Nie znaleziono line_id dla produktu: ${scrapedProduct.name}`, 'warning');
           return null;
         }).filter(Boolean)
       };
@@ -432,7 +676,8 @@ async function scrapAndUpdateOrder(msg) {
       }
       const orderUrl = `https://${apiEndpoint}/api/v1/orders/${msg.order.sellasist_order_id}`;
       if (allProductsCancelled) {
-        sendLog('Aktualizuję zamówienie jako anulowane: imię=Order, nazwisko=Canceled', 'warning');
+        const statusMessage = getOrderStatusMessage(orderStatus);
+        sendLog(statusMessage, orderStatus === 'pending' ? 'info' : 'warning');
       }
       sendLog(`Aktualizacja danych zamówienia: ${orderUrl}`, 'debug');
       const orderResponse = await fetch(orderUrl, {
@@ -513,7 +758,7 @@ function normalizeCurrency(currency) {
   // Zamień na małe litery dla porównania
   let normalizedCurrency = currency.toLowerCase().trim();
   
-  // Obsługa znanych formatów
+  // Obsługa znanych formatów i symboli
   switch (normalizedCurrency) {
     case '€':
     case 'eur':
@@ -522,20 +767,80 @@ function normalizeCurrency(currency) {
     case '£':
     case 'gbp':
     case 'pound':
+    case 'sterling':
       return 'GBP';
     case '$':
     case 'usd':
     case 'dollar':
+    case 'dollars':
       return 'USD';
     case 'pln':
     case 'zl':
     case 'zł':
     case 'złoty':
+    case 'zloty':
       return 'PLN';
+    case 'sek':
+    case 'kr':
+    case 'kronor':
+    case 'krona':
+    case 'swedish':
+      return 'SEK';
+    case 'nok':
+    case 'norwegian':
+    case 'norske':
+      return 'NOK';
+    case 'dkk':
+    case 'danish':
+    case 'danske':
+      return 'DKK';
+    case 'chf':
+    case 'swiss':
+    case 'franc':
+      return 'CHF';
+    case 'cad':
+    case 'canadian':
+      return 'CAD';
+    case 'aud':
+    case 'australian':
+      return 'AUD';
+    case 'jpy':
+    case 'yen':
+    case 'japanese':
+      return 'JPY';
+    case 'czk':
+    case 'czech':
+    case 'koruna':
+      return 'CZK';
+    case 'huf':
+    case 'hungarian':
+    case 'forint':
+      return 'HUF';
+    case 'ron':
+    case 'romanian':
+    case 'leu':
+      return 'RON';
+    case 'bgn':
+    case 'bulgarian':
+    case 'lev':
+      return 'BGN';
     default:
-      // Jeśli waluta nie jest znana, domyślnie EUR
-      sendLog(`Nieznana waluta: "${currency}", używam EUR`, 'warning');
-      return 'EUR';
+      // Jeśli waluta ma 3 znaki i wygląda jak kod ISO, sprawdź czy jest obsługiwana
+      if (/^[A-Z]{3}$/i.test(currency.trim())) {
+        const upperCurrency = currency.trim().toUpperCase();
+        
+        if (isCurrencySupported(upperCurrency)) {
+          sendLog(`Nieznana waluta "${currency}", ale wygląda jak obsługiwany kod ISO - używam: ${upperCurrency}`, 'info');
+          return upperCurrency;
+        } else {
+          sendLog(`BŁĄD: Nieobsługiwana waluta "${upperCurrency}" - przetwarzanie przerwane`, 'error');
+          throw new Error(`Nieobsługiwana waluta: ${upperCurrency}. Wtyczka obsługuje tylko: EUR, GBP, USD, SEK, NOK, DKK, PLN, CHF, CAD, AUD, JPY, CZK, HUF, RON, BGN`);
+        }
+      }
+      
+      // Jeśli waluta nie wygląda jak kod ISO, też przerwij
+      sendLog(`BŁĄD: Nierozpoznana waluta "${currency}" - przetwarzanie przerwane`, 'error');
+      throw new Error(`Nierozpoznana waluta: "${currency}". Wtyczka obsługuje tylko: EUR, GBP, USD, SEK, NOK, DKK, PLN, CHF, CAD, AUD, JPY, CZK, HUF, RON, BGN`);
   }
 }
 
@@ -548,7 +853,7 @@ function extractProductPrice(row) {
     const priceElement = row.querySelector('td.a-text-right:nth-child(8) span, .price, [data-test-id="price"]');
     if (priceElement) {
       const priceText = priceElement.innerText || priceElement.textContent;
-      const priceMatch = priceText.match(/[€£$]?\s*([\d.,]+)/);
+      const priceMatch = priceText.match(/[€£$¥]?\s*([\d.,]+)/);
       if (priceMatch && priceMatch[1]) {
         price = parseFloat(priceMatch[1].replace(/[^0-9,.]/g, '').replace(',', '.').trim());
         sendLog(`Znaleziono cenę metodą 1: ${price}`, 'info');
@@ -559,13 +864,23 @@ function extractProductPrice(row) {
     // Metoda 2: Szukaj w całym tekście wiersza
     const rowText = row.innerText || row.textContent || '';
     
-    // Szukaj wzorców z walutą: €19.95, 19,95€, EUR 19.95 itp.
+    // Szukaj wzorców z walutą: €19.95, 19,95€, EUR 19.95, 19,95 kr itp.
     const currencyPriceMatches = [
-      ...rowText.matchAll(/[€£$]\s*([\d,.]+)/g),
-      ...rowText.matchAll(/([\d,.]+)\s*[€£$]/g),
+      ...rowText.matchAll(/[€£$¥]\s*([\d,.]+)/g),
+      ...rowText.matchAll(/([\d,.]+)\s*[€£$¥]/g),
+      ...rowText.matchAll(/([\d,.]+)\s*kr\b/gi), // SEK, NOK, DKK
+      ...rowText.matchAll(/([\d,.]+)\s*zł/gi), // PLN
       ...rowText.matchAll(/EUR\s*([\d,.]+)/gi),
       ...rowText.matchAll(/GBP\s*([\d,.]+)/gi),
-      ...rowText.matchAll(/USD\s*([\d,.]+)/gi)
+      ...rowText.matchAll(/USD\s*([\d,.]+)/gi),
+      ...rowText.matchAll(/SEK\s*([\d,.]+)/gi),
+      ...rowText.matchAll(/NOK\s*([\d,.]+)/gi),
+      ...rowText.matchAll(/DKK\s*([\d,.]+)/gi),
+      ...rowText.matchAll(/PLN\s*([\d,.]+)/gi),
+      ...rowText.matchAll(/CHF\s*([\d,.]+)/gi),
+      ...rowText.matchAll(/CAD\s*([\d,.]+)/gi),
+      ...rowText.matchAll(/AUD\s*([\d,.]+)/gi),
+      ...rowText.matchAll(/JPY\s*([\d,.]+)/gi)
     ];
     
     if (currencyPriceMatches.length > 0) {
@@ -581,7 +896,7 @@ function extractProductPrice(row) {
     }
     
     // Metoda 3: Szukaj słów kluczowych
-    const priceKeywordsMatches = rowText.match(/(?:price|preis|cena|precio|subtotal|total)[\s:]*[€£$]?\s*([\d,.]+)/i);
+    const priceKeywordsMatches = rowText.match(/(?:price|preis|cena|precio|subtotal|total)[\s:]*[€£$¥]?\s*([\d,.]+)/i);
     if (priceKeywordsMatches && priceKeywordsMatches[1]) {
       price = parseFloat(priceKeywordsMatches[1].replace(/[^0-9,.]/g, '').replace(',', '.').trim());
       if (price > 0) {
@@ -601,16 +916,16 @@ function extractProductPrice(row) {
 
 // Cache dla krajów z API - zmienne przeniesione do góry pliku
 
-// Pobierz kraje z API Sellasist
+// Pobierz kraje z API Sellasist - z inteligentnym cache
 async function fetchCountriesFromAPI(apiKey, apiEndpoint) {
   try {
-    // Sprawdź cache
+    // Sprawdź cache - 24h dla krajów (rzadko się zmieniają)
     if (window.countriesCache && window.cacheTimestamp && (Date.now() - window.cacheTimestamp < window.CACHE_DURATION)) {
-      sendLog('Używam cache krajów', 'debug');
+      sendLog(`Używam cache krajów (${window.countriesCache.length} krajów, cache ważny jeszcze ${Math.round((window.CACHE_DURATION - (Date.now() - window.cacheTimestamp)) / 1000 / 60 / 60)}h)`, 'debug');
       return window.countriesCache;
     }
 
-    sendLog('Pobieram kraje z API Sellasist...', 'debug');
+    sendLog('Pobieram kraje z API Sellasist (pierwsze uruchomienie lub cache wygasł)...', 'info');
     const response = await fetch(`https://${apiEndpoint}/api/v1/countries`, {
       method: 'GET',
       headers: {
@@ -626,11 +941,11 @@ async function fetchCountriesFromAPI(apiKey, apiEndpoint) {
 
     const countries = await response.json();
     
-    // Zapisz do cache
+    // Zapisz do cache na 24h
     window.countriesCache = countries;
     window.cacheTimestamp = Date.now();
     
-    sendLog(`Pobrano ${countries.length} krajów z API`, 'debug');
+    sendLog(`✅ Pobrano i zapisano do cache ${countries.length} krajów (ważne przez 24h)`, 'success');
     return countries;
   } catch (error) {
     sendLog(`Błąd pobierania krajów z API: ${error.message}`, 'error');
@@ -714,7 +1029,11 @@ function getCountryCode(countryName) {
     'spanien': 'ES',
     
     'poland': 'PL',
-    'polska': 'PL'
+    'polska': 'PL',
+    
+    'sweden': 'SE',
+    'szwecja': 'SE',
+    'sverige': 'SE'
   };
   
   return countryCodeMap[normalizedName] || null;
@@ -753,7 +1072,12 @@ function getCountryIDFallback(countryName) {
     
     // Polska
     'poland': '170',
-    'polska': '170'
+    'polska': '170',
+    
+    // Szwecja
+    'sweden': '210',
+    'szwecja': '210',
+    'sverige': '210'
   };
   
   // Sprawdź dokładne dopasowanie
@@ -780,6 +1104,9 @@ function getCountryIDFallback(countryName) {
   } else if (url.includes('amazon.es')) {
     sendLog(`Ustalono domyślny kraj na podstawie domeny amazon.es -> Hiszpania (ID: 209)`, 'info');
     return '209';
+  } else if (url.includes('amazon.se')) {
+    sendLog(`Ustalono domyślny kraj na podstawie domeny amazon.se -> Szwecja (ID: 210)`, 'info');
+    return '210';
   }
   
   sendLog(`Nie udało się ustalić ID kraju dla: ${countryName}`, 'warning');
@@ -793,7 +1120,9 @@ function extractOrderValues() {
     tax: null,      // VAT
     total: null,    // suma brutto
     shipping: null, // koszty wysyłki
-    shippingVat: null // VAT od wysyłki
+    shippingVat: null, // VAT od wysyłki
+    netProceeds: null, // "Sales proceeds net of VAT" - wartość netto dla UK
+    shippingNet: null // koszty wysyłki netto
   };
 
   try {
@@ -821,7 +1150,7 @@ function extractOrderValues() {
             const line = lines[i].toLowerCase();
             
             // Szukamy wartości numerycznych (z ewentualnym symbolem waluty)
-            const valueMatch = line.match(/([€£$]?\s*[\d.,]+)/);
+            const valueMatch = line.match(/([€£$¥]?\s*[\d.,]+(?:\s*kr|\s*zł)?)/);
             
             if (line.includes('items total') || line.includes('subtotal') || line.includes('suma netto') || line.includes('zwischensumme') || line.includes('artikelsumme')) {
               if (valueMatch) {
@@ -835,7 +1164,50 @@ function extractOrderValues() {
               if (valueMatch) {
                 result.shipping = parseFloat(valueMatch[1].replace(/[^0-9,.]/g, '').replace(',', '.'));
               }
-            } else if (line.includes('grand total') || line.includes('total') || line.includes('suma') || line.includes('razem') || line.includes('gesamtsumme') || line.includes('gesamt')) {
+            } else if (line.includes('sales proceeds net of vat') || line.includes('net proceeds')) {
+              if (valueMatch) {
+                result.netProceeds = parseFloat(valueMatch[1].replace(/[^0-9,.]/g, '').replace(',', '.'));
+                sendLog(`Znaleziono "Sales proceeds net of VAT": ${result.netProceeds}`, 'debug');
+              }
+            }
+          }
+          
+          // Specjalne przetwarzanie dla UK VAT 0% - znajdź koszty wysyłki netto
+          // W przykładzie: wysyłka netto = Sales proceeds net of VAT - cena produktu netto
+          if (text.includes('sales proceeds net of vat') && text.includes('unit price')) {
+            const lines = text.split('\n').map(line => line.trim()).filter(line => line.length > 0);
+            
+            let unitPriceNet = null;
+            let salesProceedsNet = null;
+            
+            for (const line of lines) {
+              const valueMatch = line.match(/([€£$¥]?\s*[\d.,]+(?:\s*kr|\s*zł)?)/);
+              
+              if (line.toLowerCase().includes('unit price') && line.toLowerCase().includes('vat exclusive') && valueMatch) {
+                unitPriceNet = parseFloat(valueMatch[1].replace(/[^0-9,.]/g, '').replace(',', '.'));
+                sendLog(`UK VAT 0%: Znaleziono cenę jednostkową netto: ${unitPriceNet}`, 'debug');
+              }
+              
+              if (line.toLowerCase().includes('sales proceeds net of vat') && valueMatch) {
+                salesProceedsNet = parseFloat(valueMatch[1].replace(/[^0-9,.]/g, '').replace(',', '.'));
+                sendLog(`UK VAT 0%: Znaleziono Sales proceeds net of VAT: ${salesProceedsNet}`, 'debug');
+              }
+            }
+            
+            // Oblicz koszty wysyłki netto
+            if (unitPriceNet !== null && salesProceedsNet !== null) {
+              result.shippingNet = salesProceedsNet - unitPriceNet;
+              sendLog(`UK VAT 0%: Obliczono koszty wysyłki netto: ${salesProceedsNet} - ${unitPriceNet} = ${result.shippingNet}`, 'debug');
+            }
+          }
+          
+          for (let i = 0; i < lines.length; i++) {
+            const line = lines[i].toLowerCase();
+            
+            // Szukamy wartości numerycznych (z ewentualnym symbolem waluty)
+            const valueMatch = line.match(/([€£$¥]?\s*[\d.,]+(?:\s*kr|\s*zł)?)/);
+            
+            if (line.includes('grand total') || line.includes('total') || line.includes('suma') || line.includes('razem') || line.includes('gesamtsumme') || line.includes('gesamt')) {
               // Upewniamy się, że to nie jest subtotal
               if (!line.includes('subtotal') && !line.includes('sub-total') && valueMatch) {
                 result.total = parseFloat(valueMatch[1].replace(/[^0-9,.]/g, '').replace(',', '.'));
@@ -856,7 +1228,7 @@ function extractOrderValues() {
       
       if (subtotalElement) {
         const text = subtotalElement.innerText || subtotalElement.textContent;
-        const value = text.match(/([€£$]?\s*[\d.,]+)/);
+        const value = text.match(/([€£$¥]?\s*[\d.,]+(?:\s*kr|\s*zł)?)/);
         if (value) {
           result.subtotal = parseFloat(value[1].replace(/[^0-9,.]/g, '').replace(',', '.'));
         }
@@ -864,7 +1236,7 @@ function extractOrderValues() {
       
       if (taxElement) {
         const text = taxElement.innerText || taxElement.textContent;
-        const value = text.match(/([€£$]?\s*[\d.,]+)/);
+        const value = text.match(/([€£$¥]?\s*[\d.,]+(?:\s*kr|\s*zł)?)/);
         if (value) {
           result.tax = parseFloat(value[1].replace(/[^0-9,.]/g, '').replace(',', '.'));
         }
@@ -872,7 +1244,7 @@ function extractOrderValues() {
       
       if (totalElement) {
         const text = totalElement.innerText || totalElement.textContent;
-        const value = text.match(/([€£$]?\s*[\d.,]+)/);
+        const value = text.match(/([€£$¥]?\s*[\d.,]+(?:\s*kr|\s*zł)?)/);
         if (value) {
           result.total = parseFloat(value[1].replace(/[^0-9,.]/g, '').replace(',', '.'));
         }
@@ -880,7 +1252,7 @@ function extractOrderValues() {
       
       if (shippingElement) {
         const text = shippingElement.innerText || shippingElement.textContent;
-        const value = text.match(/([€£$]?\s*[\d.,]+)/);
+        const value = text.match(/([€£$¥]?\s*[\d.,]+(?:\s*kr|\s*zł)?)/);
         if (value) {
           result.shipping = parseFloat(value[1].replace(/[^0-9,.]/g, '').replace(',', '.'));
         }
@@ -890,12 +1262,16 @@ function extractOrderValues() {
     // Jeśli brakuje total, a mamy subtotal i tax, możemy go obliczyć
     if (result.total === null && result.subtotal !== null && result.tax !== null) {
       result.total = result.subtotal + result.tax;
+      sendLog(`Obliczono total na podstawie subtotal + tax: ${result.subtotal} + ${result.tax} = ${result.total}`, 'debug');
     }
     
-    // Jeśli mamy shipping, dodaj go do total
-    if (result.shipping !== null && result.total !== null) {
-      result.total = result.total + result.shipping;
-    }
+    // UWAGA: NIE dodawaj shipping do total - Grand total już zawiera koszty wysyłki!
+    // Amazon pokazuje:
+    // Items total: 14,99 GBP (produkty)
+    // Shipping total: 0,49 GBP (wysyłka)  
+    // Grand total: 15,48 GBP (już zawiera shipping!)
+    
+    sendLog(`Wykryte wartości zamówienia: subtotal=${result.subtotal}, tax=${result.tax}, total=${result.total}, shipping=${result.shipping}`, 'debug');
     
     return result;
   } catch (e) {
@@ -908,25 +1284,256 @@ function extractOrderValues() {
 function detectCurrency() {
   try {
     // Różne metody wykrywania waluty
-    
-    // 1. Szukaj symboli walut w tekście
     const pageText = document.body.innerText;
-    if (pageText.includes('€')) return 'EUR';
-    if (pageText.includes('£')) return 'GBP';
-    if (pageText.includes('$')) return 'USD';
-    
-    // 2. Sprawdź URL - może zawierać kod kraju
     const url = window.location.href;
-    if (url.includes('amazon.de')) return 'EUR';
-    if (url.includes('amazon.co.uk')) return 'GBP';
-    if (url.includes('amazon.com')) return 'USD';
     
-    // 3. Szukaj tekstu walut
-    if (pageText.includes('EUR') || pageText.includes('Euro')) return 'EUR';
-    if (pageText.includes('GBP') || pageText.includes('Pound')) return 'GBP';
-    if (pageText.includes('USD') || pageText.includes('Dollar')) return 'USD';
+    sendLog(`Wykrywanie waluty dla URL: ${url}`, 'debug');
+    
+    // 1. PRIORYTET NAJWYŻSZY: Szukaj walut w tabelach podsumowania zamówienia (najbardziej precyzyjne)
+    const summarySelectors = [
+      '.order-summary td',
+      '.order-details-bordered-box-sale-proceeds td',
+      'table.a-keyvalue td',
+      'td.a-text-right',
+      'td.a-text-right span',
+      '.summary-section td'
+    ];
+    
+    // Sprawdź tabele podsumowania - szukaj "Grand total", "Items total" itp.
+    for (const selector of summarySelectors) {
+      try {
+        const elements = document.querySelectorAll(selector);
+        for (const element of elements) {
+          const text = element.textContent || element.innerText || '';
+          
+          // Szukaj linii z "total", "shipping", "items" + waluta
+          if (text.includes('total') || text.includes('Total') || text.includes('shipping') || text.includes('Shipping') || text.includes('Items')) {
+            const currencyMatch = text.match(/\b(GBP|EUR|USD|SEK|NOK|DKK|PLN|CHF|CAD|AUD|JPY|CZK|HUF|RON|BGN)\b/gi);
+            if (currencyMatch && currencyMatch.length > 0) {
+              const currency = currencyMatch[0].toUpperCase();
+              sendLog(`Wykryto walutę z tabeli podsumowania "${selector}": ${currency} (tekst: "${text.trim()}")`, 'debug');
+              
+              if (!isCurrencySupported(currency)) {
+                sendLog(`BŁĄD: Nieobsługiwana waluta "${currency}" - przetwarzanie przerwane`, 'error');
+                throw new Error(`Nieobsługiwana waluta: ${currency}. Wtyczka obsługuje tylko: EUR, GBP, USD, SEK, NOK, DKK, PLN, CHF, CAD, AUD, JPY, CZK, HUF, RON, BGN`);
+              }
+              
+              return currency;
+            }
+          }
+        }
+      } catch (e) {
+        if (e.message.includes('Nieobsługiwana waluta')) {
+          throw e; // Przekaż błędy walut dalej
+        }
+        // Ignoruj inne błędy selektorów
+      }
+    }
+    
+    // 2. PRIORYTET 2: Szukaj walut w innych elementach DOM z cenami
+    const priceSelectors = [
+      'td.a-text-right span',
+      '.a-price-currency',
+      '.a-price .a-price-symbol',
+      '[data-test-id="price"]',
+      '.price',
+      '.currency'
+    ];
+    
+    for (const selector of priceSelectors) {
+      try {
+        const elements = document.querySelectorAll(selector);
+        for (const element of elements) {
+          const text = element.textContent || element.innerText || '';
+          
+          // Szukaj wzorców: "30,99 GBP", "30,99&nbsp;GBP", "€30,99", "£30,99"
+          const currencyMatch = text.match(/(?:\d+[.,]\d+\s*(?:&nbsp;)?\s*(GBP|EUR|USD|SEK|NOK|DKK|PLN|CHF|CAD|AUD|JPY|CZK|HUF|RON|BGN))|([€£$¥])\s*\d+[.,]\d+|(GBP|EUR|USD|SEK|NOK|DKK|PLN|CHF|CAD|AUD|JPY|CZK|HUF|RON|BGN)\s*\d+[.,]\d+/gi);
+          
+          if (currencyMatch) {
+            // Wyciągnij kod waluty z dopasowania
+            let currency = null;
+            for (const match of currencyMatch) {
+              if (match.includes('GBP')) currency = 'GBP';
+              else if (match.includes('EUR') || match.includes('€')) currency = 'EUR';
+              else if (match.includes('USD') || match.includes('$')) currency = 'USD';
+              else if (match.includes('SEK')) currency = 'SEK';
+              else if (match.includes('NOK')) currency = 'NOK';
+              else if (match.includes('DKK')) currency = 'DKK';
+              else if (match.includes('PLN')) currency = 'PLN';
+              else if (match.includes('CHF')) currency = 'CHF';
+              else if (match.includes('CAD')) currency = 'CAD';
+              else if (match.includes('AUD')) currency = 'AUD';
+              else if (match.includes('JPY') || match.includes('¥')) currency = 'JPY';
+              else if (match.includes('CZK')) currency = 'CZK';
+              else if (match.includes('HUF')) currency = 'HUF';
+              else if (match.includes('RON')) currency = 'RON';
+              else if (match.includes('BGN')) currency = 'BGN';
+              else if (match.includes('£')) currency = 'GBP';
+              
+              if (currency) {
+                sendLog(`Wykryto walutę z elementu DOM "${selector}": ${currency} (tekst: "${text.trim()}")`, 'debug');
+                
+                // Sprawdź czy waluta jest obsługiwana
+                if (!isCurrencySupported(currency)) {
+                  sendLog(`BŁĄD: Nieobsługiwana waluta "${currency}" - przetwarzanie przerwane`, 'error');
+                  throw new Error(`Nieobsługiwana waluta: ${currency}. Wtyczka obsługuje tylko: EUR, GBP, USD, SEK, NOK, DKK, PLN, CHF, CAD, AUD, JPY, CZK, HUF, RON, BGN`);
+                }
+                
+                return currency;
+              }
+            }
+          }
+        }
+      } catch (e) {
+        // Ignoruj błędy selektorów, które mogą nie działać
+      }
+    }
+    
+    // 2. PRIORYTET 2: Szukaj symboli walut w tekście strony (fallback)
+    if (pageText.includes('€')) {
+      const currency = 'EUR';
+      sendLog('Wykryto walutę z tekstu strony: EUR (symbol €)', 'debug');
+      if (!isCurrencySupported(currency)) {
+        sendLog(`BŁĄD: Nieobsługiwana waluta "${currency}" - przetwarzanie przerwane`, 'error');
+        throw new Error(`Nieobsługiwana waluta: ${currency}`);
+      }
+      return currency;
+    }
+    if (pageText.includes('£')) {
+      const currency = 'GBP';
+      sendLog('Wykryto walutę z tekstu strony: GBP (symbol £)', 'debug');
+      if (!isCurrencySupported(currency)) {
+        sendLog(`BŁĄD: Nieobsługiwana waluta "${currency}" - przetwarzanie przerwane`, 'error');
+        throw new Error(`Nieobsługiwana waluta: ${currency}`);
+      }
+      return currency;
+    }
+    if (pageText.includes('$')) {
+      const currency = 'USD';
+      sendLog('Wykryto walutę z tekstu strony: USD (symbol $)', 'debug');
+      if (!isCurrencySupported(currency)) {
+        sendLog(`BŁĄD: Nieobsługiwana waluta "${currency}" - przetwarzanie przerwane`, 'error');
+        throw new Error(`Nieobsługiwana waluta: ${currency}`);
+      }
+      return currency;
+    }
+    if (pageText.includes('kr') && (pageText.includes('SEK') || url.includes('amazon.se'))) {
+      sendLog('Wykryto walutę z tekstu strony: SEK (kr + kontekst)', 'debug');
+      return 'SEK';
+    }
+    if (pageText.includes('kr') && (pageText.includes('NOK') || url.includes('amazon.no'))) {
+      sendLog('Wykryto walutę z tekstu strony: NOK (kr + kontekst)', 'debug');
+      return 'NOK';
+    }
+    if (pageText.includes('kr') && (pageText.includes('DKK') || url.includes('amazon.dk'))) {
+      sendLog('Wykryto walutę z tekstu strony: DKK (kr + kontekst)', 'debug');
+      return 'DKK';
+    }
+    if (pageText.includes('zł') || pageText.includes('PLN')) {
+      sendLog('Wykryto walutę z tekstu strony: PLN (zł/PLN)', 'debug');
+      return 'PLN';
+    }
+    if (pageText.includes('¥') || pageText.includes('JPY')) {
+      sendLog('Wykryto walutę z tekstu strony: JPY (¥/JPY)', 'debug');
+      return 'JPY';
+    }
+    if (pageText.includes('CHF')) {
+      sendLog('Wykryto walutę z tekstu strony: CHF', 'debug');
+      return 'CHF';
+    }
+    
+    // 2. Szukaj kodów walut w tekście
+    const currencyMatches = pageText.match(/\b(EUR|GBP|USD|SEK|NOK|DKK|PLN|CHF|CAD|AUD|JPY|CZK|HUF|RON|BGN)\b/gi);
+    if (currencyMatches && currencyMatches.length > 0) {
+      const mostCommon = currencyMatches[0].toUpperCase();
+      sendLog(`Wykryto walutę z tekstu strony (kod): ${mostCommon}`, 'debug');
+      return mostCommon;
+    }
+    
+    // 3. FALLBACK: Sprawdź URL tylko jako ostateczność
+    if (url.includes('amazon.de')) {
+      sendLog('Wykryto walutę z URL (fallback) amazon.de: EUR', 'debug');
+      return 'EUR';
+    }
+    if (url.includes('amazon.co.uk')) {
+      sendLog('Wykryto walutę z URL (fallback) amazon.co.uk: GBP', 'debug');
+      return 'GBP';
+    }
+    if (url.includes('amazon.com')) {
+      sendLog('Wykryto walutę z URL (fallback) amazon.com: USD', 'debug');
+      return 'USD';
+    }
+    if (url.includes('amazon.fr')) {
+      sendLog('Wykryto walutę z URL (fallback) amazon.fr: EUR', 'debug');
+      return 'EUR';
+    }
+    if (url.includes('amazon.it')) {
+      sendLog('Wykryto walutę z URL (fallback) amazon.it: EUR', 'debug');
+      return 'EUR';
+    }
+    if (url.includes('amazon.es')) {
+      sendLog('Wykryto walutę z URL (fallback) amazon.es: EUR', 'debug');
+      return 'EUR';
+    }
+    if (url.includes('amazon.nl')) {
+      sendLog('Wykryto walutę z URL (fallback) amazon.nl: EUR', 'debug');
+      return 'EUR';
+    }
+    if (url.includes('amazon.se')) {
+      sendLog('Wykryto walutę z URL (fallback) amazon.se: SEK', 'debug');
+      return 'SEK';
+    }
+    if (url.includes('amazon.no')) {
+      sendLog('Wykryto walutę z URL (fallback) amazon.no: NOK', 'debug');
+      return 'NOK';
+    }
+    if (url.includes('amazon.dk')) {
+      sendLog('Wykryto walutę z URL (fallback) amazon.dk: DKK', 'debug');
+      return 'DKK';
+    }
+    if (url.includes('amazon.pl')) {
+      sendLog('Wykryto walutę z URL (fallback) amazon.pl: PLN', 'debug');
+      return 'PLN';
+    }
+    if (url.includes('amazon.ca')) {
+      sendLog('Wykryto walutę z URL (fallback) amazon.ca: CAD', 'debug');
+      return 'CAD';
+    }
+    if (url.includes('amazon.au')) {
+      sendLog('Wykryto walutę z URL (fallback) amazon.au: AUD', 'debug');
+      return 'AUD';
+    }
+    if (url.includes('amazon.jp')) {
+      sendLog('Wykryto walutę z URL (fallback) amazon.jp: JPY', 'debug');
+      return 'JPY';
+    }
+    
+    // 4. Szukaj tekstowych nazw walut
+    if (pageText.includes('Euro')) return 'EUR';
+    if (pageText.includes('Pound') || pageText.includes('Sterling')) return 'GBP';
+    if (pageText.includes('Dollar')) return 'USD';
+    if (pageText.includes('Krona') || pageText.includes('Kronor')) return 'SEK';
+    if (pageText.includes('Krone') || pageText.includes('Kroner')) {
+      // Może być NOK lub DKK - sprawdź kontekst
+      if (pageText.includes('Norwegian') || pageText.includes('Norge')) return 'NOK';
+      if (pageText.includes('Danish') || pageText.includes('Danmark')) return 'DKK';
+      return 'NOK'; // Domyślnie NOK jeśli nie można rozróżnić
+    }
+    
+    // 5. Sprawdź elementy DOM z atrybutami walut
+    const currencyElements = document.querySelectorAll('[data-currency], [currency], .currency');
+    for (const element of currencyElements) {
+      const currencyAttr = element.getAttribute('data-currency') || 
+                          element.getAttribute('currency') || 
+                          element.textContent;
+      if (currencyAttr && /^[A-Z]{3}$/.test(currencyAttr.trim())) {
+        sendLog(`Wykryto walutę z atrybutu DOM: ${currencyAttr.trim()}`, 'debug');
+        return currencyAttr.trim().toUpperCase();
+      }
+    }
     
     // Nie znaleziono jednoznacznej waluty
+    sendLog('Nie udało się wykryć waluty ze strony Amazon', 'debug');
     return null;
   } catch (e) {
     sendLog(`Błąd podczas wykrywania waluty: ${e.message}`, 'warning');
@@ -1287,10 +1894,66 @@ function calculateTaxRate(matchedProduct, orderLine) {
   return vatRates[countryCode] || 21;
 }
 
-// Funkcja usunięta - nieużywana
+// Funkcja do wykrywania transakcji WDT (0% VAT dla B2B)
+function detectWDTTransaction(row, priceGross, vatAmount) {
+  try {
+    const rowText = row.innerText || row.textContent || '';
+    
+    // 1. Sprawdź czy kwota VAT = 0 ale cena > 0 (typowe dla WDT)
+    if (priceGross > 0 && (vatAmount === 0 || vatAmount === null)) {
+      sendLog(`Możliwa transakcja WDT: cena ${priceGross}, VAT ${vatAmount}`, 'debug');
+      
+      // 2. Szukaj wskaźników transakcji B2B/WDT w tekście
+      const wdtIndicators = [
+        'VAT exclusive',
+        'VAT-free',
+        'No VAT',
+        'B2B',
+        'Business',
+        'Intra-community',
+        'WDT',
+        'Wewnątrzwspólnotowa',
+        '0% VAT',
+        'VAT 0%',
+        'Tax-free',
+        'Exempt'
+      ];
+      
+      const hasWDTIndicator = wdtIndicators.some(indicator => 
+        rowText.toLowerCase().includes(indicator.toLowerCase())
+      );
+      
+      if (hasWDTIndicator) {
+        sendLog(`Wykryto wskaźnik WDT w tekście produktu`, 'info');
+        return true;
+      }
+      
+      // 3. Sprawdź czy w tabeli podsumowania nie ma podziału na netto/brutto
+      const summaryTable = row.querySelector('td:nth-child(8) > div > table.a-normal.a-spacing-none');
+      if (summaryTable) {
+        const summaryText = summaryTable.innerText || '';
+        
+        // Jeśli nie ma słów "VAT", "Tax", "Included" to może być WDT
+        const hasVatInfo = summaryText.toLowerCase().includes('vat') || 
+                          summaryText.toLowerCase().includes('tax') ||
+                          summaryText.toLowerCase().includes('included');
+        
+        if (!hasVatInfo && priceGross > 0) {
+          sendLog(`Brak informacji o VAT w tabeli podsumowania - możliwa transakcja WDT`, 'debug');
+          return true;
+        }
+      }
+    }
+    
+    return false;
+  } catch (error) {
+    sendLog(`Błąd wykrywania transakcji WDT: ${error.message}`, 'error');
+    return false;
+  }
+}
 
 // Funkcja do ekstrahowania danych produktów - zoptymalizowana
-function extractProductData() {
+function extractProductData(useUkVatZero = false) {
   const result = { products: [] };
 
   try {
@@ -1315,7 +1978,7 @@ function extractProductData() {
     
     if (productRows && productRows.length > 0) {
       sendLog(`Znaleziono ${productRows.length} wierszy używając selektora: ${usedSelector}`, 'debug');
-      productRows.forEach(processProductRow);
+      productRows.forEach(row => processProductRow(row, useUkVatZero));
       sendLog(`Przetworzono ${productRows.length} produktów`, 'debug');
     } else {
       sendLog('Nie znaleziono żadnych wierszy produktów!', 'warning');
@@ -1344,7 +2007,7 @@ function extractProductData() {
   }
 
   // Funkcja do przetwarzania wiersza produktu
-  function processProductRow(row) {
+  function processProductRow(row, useUkVatZero = false) {
     try {
       // Sprawdź status, czy nie jest anulowany
       let status = '';
@@ -1420,6 +2083,20 @@ function extractProductData() {
         }
       }
       
+      // 1a. Dla UK VAT 0% - pobierz cenę netto z kolumny "Unit price (VAT exclusive)"
+      if (useUkVatZero) {
+        const priceNetElement = row.querySelector('td:nth-child(6) span, td.a-text-right:nth-child(6) span');
+        if (priceNetElement) {
+          const priceNetText = priceNetElement.innerText || priceNetElement.textContent;
+          const priceNetMatch = priceNetText.match(/([€£$]?\s*[\d.,]+)/);
+          if (priceNetMatch && priceNetMatch[1]) {
+            priceNet = parseFloat(priceNetMatch[1].replace(/[^0-9,.]/g, '').replace(',', '.').trim());
+            priceGross = priceNet; // Dla UK VAT 0%, cena netto = cena brutto
+            sendLog(`UK VAT 0%: Znaleziono cenę netto z kolumny VAT exclusive: ${priceNet}`, 'info');
+          }
+        }
+      }
+      
       // 2. Pobieranie kwoty VAT z tabeli podsumowania
       const vatElement = row.querySelector('td:nth-child(8) > div > table.a-normal.a-spacing-none > tbody > div:nth-child(2) > div:nth-child(3) > span');
       if (vatElement) {
@@ -1432,7 +2109,23 @@ function extractProductData() {
       }
       
       // 3. Obliczanie stawki VAT
-      if (vatAmount > 0 && priceGross > 0) {
+      
+      // Sprawdź czy to transakcja WDT (0% VAT dla B2B)
+      const isWDTTransaction = detectWDTTransaction(row, priceGross, vatAmount);
+      
+      if (useUkVatZero) {
+        // Dla UK VAT 0% używamy cen netto (bez VAT)
+        vatRate = 0;
+        priceNet = priceGross; // Cena brutto to faktycznie cena netto dla UK VAT 0%
+        vatAmount = 0;
+        sendLog(`UK VAT 0%: Ustawiono stawkę VAT na 0%, cena netto: ${priceNet}`, 'info');
+      } else if (isWDTTransaction) {
+        // Transakcja WDT - 0% VAT dla B2B
+        vatRate = 0;
+        priceNet = priceGross; // Cena bez VAT
+        vatAmount = 0;
+        sendLog(`WDT B2B: Wykryto transakcję 0% VAT, cena netto: ${priceNet}`, 'info');
+      } else if (vatAmount > 0 && priceGross > 0) {
         const priceNet = priceGross - vatAmount;
         vatRate = Math.round((vatAmount / priceNet) * 100);
         sendLog(`Obliczono stawkę VAT na podstawie kwoty VAT i ceny brutto: ${vatRate}%`, 'info');
@@ -1467,9 +2160,45 @@ function extractProductData() {
       
       // Dodaj produkt tylko jeśli mamy nazwę
       if (productName) {
-        // Przelicz cenę jednostkową jeśli ilość > 1
+        // WYKRYWANIE PROMOCJI - sprawdź czy jest "Item total" po promocji
+        let finalItemTotal = null;
+        let promotionAmount = 0;
+        let hasPromotion = false;
+        
+        // Szukaj w kolumnie "Proceeds" tabeli z "Item subtotal", "Promotion", "Item total"
+        const proceedsElement = row.querySelector('td:nth-child(8), td:last-child');
+        if (proceedsElement) {
+          const proceedsText = proceedsElement.innerText || proceedsElement.textContent || '';
+          
+          // Sprawdź czy są informacje o promocji
+          if (proceedsText.includes('Promotion') && proceedsText.includes('Item total')) {
+            hasPromotion = true;
+            
+            // Wyciągnij kwotę promocji
+            const promotionMatch = proceedsText.match(/Promotion[:\s]*-?\s*([€£$¥]?\s*[\d.,]+)/i);
+            if (promotionMatch && promotionMatch[1]) {
+              promotionAmount = parseFloat(promotionMatch[1].replace(/[^0-9,.]/g, '').replace(',', '.').trim());
+              sendLog(`Znaleziono promocję: -${promotionAmount}`, 'info');
+            }
+            
+            // Wyciągnij "Item total" (cena po promocji)
+            const itemTotalMatch = proceedsText.match(/Item total[:\s]*([€£$¥]?\s*[\d.,]+)/i);
+            if (itemTotalMatch && itemTotalMatch[1]) {
+              finalItemTotal = parseFloat(itemTotalMatch[1].replace(/[^0-9,.]/g, '').replace(',', '.').trim());
+              sendLog(`Znaleziono Item total po promocji: ${finalItemTotal}`, 'info');
+            }
+          }
+        }
+        
+        // Oblicz cenę jednostkową - użyj ceny po promocji jeśli dostępna
         let pricePerUnit = priceGross;
-        if (quantity > 1 && priceGross > 0) {
+        
+        if (hasPromotion && finalItemTotal !== null && quantity > 0) {
+          // Użyj ceny po promocji
+          pricePerUnit = finalItemTotal / quantity;
+          sendLog(`PROMOCJA: Obliczono cenę jednostkową po promocji: ${finalItemTotal} / ${quantity} = ${pricePerUnit} (zamiast standardowej ${priceGross})`, 'info');
+        } else if (quantity > 1 && priceGross > 0) {
+          // Standardowe obliczenie bez promocji
           pricePerUnit = priceGross / quantity;
           sendLog(`Przeliczono cenę jednostkową: ${priceGross} / ${quantity} = ${pricePerUnit}`, 'info');
         }
@@ -1477,15 +2206,16 @@ function extractProductData() {
           name: productName,
           ean: sku,  // Używamy SKU jako EAN
           quantity,
-          price: pricePerUnit, // Używamy ceny jednostkowej
+          price: pricePerUnit, // Używamy ceny jednostkowej (po promocji jeśli dostępna)
           tax_rate: vatRate,  // Używamy stawki VAT w procentach
           tax_amount: vatAmount, // Zachowujemy kwotę VAT
           catalog_number: asin,
-          additional_information: `Order Item ID: ${orderItemId}`,
+          additional_information: `Order Item ID: ${orderItemId}${hasPromotion ? `, Promotion: -${promotionAmount}` : ''}`,
           status: status // Dodajemy status produktu
         };
         result.products.push(product);
-        sendLog(`Dodano produkt: ${productName} (${quantity}x) - ${pricePerUnit}, SKU/EAN: ${sku || 'brak'}, Stawka VAT: ${vatRate}%`, 'success');
+        const promotionInfo = hasPromotion ? ` [PROMOCJA: -${promotionAmount}]` : '';
+        sendLog(`Dodano produkt: ${productName} (${quantity}x) - ${pricePerUnit}${promotionInfo}, SKU/EAN: ${sku || 'brak'}, Stawka VAT: ${vatRate}%`, 'success');
       } else {
         sendLog('Pominięto produkt bez nazwy', 'warning');
       }
@@ -1548,6 +2278,87 @@ function sendOrderError(orderId, error) {
     orderId: orderId,
     error: error
   });
+}
+
+// Funkcja zwracająca odpowiednie nazwisko na podstawie statusu zamówienia
+function getOrderStatusSurname(orderStatus) {
+  switch (orderStatus) {
+    case 'pending':
+      return 'Pending';
+    case 'cancelled':
+      return 'Canceled';
+    case 'error':
+      return 'DataError';
+    default:
+      return 'Unknown';
+  }
+}
+
+// Funkcja zwracająca odpowiedni komunikat na podstawie statusu zamówienia
+function getOrderStatusMessage(orderStatus) {
+  switch (orderStatus) {
+    case 'pending':
+      return 'Zamówienie w toku - Amazon nie udostępnił jeszcze pełnych danych: imię=Order, nazwisko=Pending';
+    case 'cancelled':
+      return 'Zamówienie anulowane - wszystkie produkty mają status anulowany: imię=Order, nazwisko=Canceled';
+    case 'error':
+      return 'Błąd danych zamówienia - niepełne lub nieprawidłowe dane: imię=Order, nazwisko=DataError';
+    default:
+      return 'Nieznany status zamówienia: imię=Order, nazwisko=Unknown';
+  }
+}
+
+// Funkcje czyszczenia zamówień Pending zostały usunięte
+// Wtyczka teraz ignoruje zamówienia Pending/nieopłacone
+
+// Funkcja sprawdzająca czy waluta jest obsługiwana przez wtyczkę
+function isCurrencySupported(currency) {
+  if (!currency) return false;
+  
+  const supportedCurrencies = [
+    'EUR', 'GBP', 'USD', 'SEK', 'NOK', 'DKK', 'PLN', 
+    'CHF', 'CAD', 'AUD', 'JPY', 'CZK', 'HUF', 'RON', 'BGN'
+  ];
+  
+  return supportedCurrencies.includes(currency.toUpperCase());
+}
+
+// Funkcja sprawdzająca czy zamówienie jest wysyłane do UK
+function isUKOrder(addressData, currency) {
+  // Sprawdź URL - czy to amazon.co.uk
+  if (window.location.href.includes('amazon.co.uk')) {
+    sendLog('Wykryto zamówienie UK na podstawie domeny amazon.co.uk', 'debug');
+    return true;
+  }
+  
+  // Sprawdź walutę - GBP wskazuje na UK
+  if (currency === 'GBP') {
+    sendLog('Wykryto zamówienie UK na podstawie waluty GBP', 'debug');
+    return true;
+  }
+  
+  // Sprawdź kod pocztowy UK (format: AB12 3CD lub AB1 2CD)
+  if (addressData && addressData.postcode) {
+    const ukPostcodeRegex = /^[A-Z]{1,2}[\d]{1,2}[A-Z]?\s?[\d][A-Z]{2}$/i;
+    if (ukPostcodeRegex.test(addressData.postcode.trim())) {
+      sendLog(`Wykryto zamówienie UK na podstawie kodu pocztowego: ${addressData.postcode}`, 'debug');
+      return true;
+    }
+  }
+  
+  // Sprawdź nazwę kraju
+  if (addressData && addressData.country) {
+    const countryLower = addressData.country.toLowerCase();
+    if (countryLower.includes('united kingdom') || 
+        countryLower.includes('uk') || 
+        countryLower === 'gb' ||
+        countryLower === 'great britain') {
+      sendLog(`Wykryto zamówienie UK na podstawie nazwy kraju: ${addressData.country}`, 'debug');
+      return true;
+    }
+  }
+  
+  return false;
 }
 
 } // Zamknięcie bloku else 

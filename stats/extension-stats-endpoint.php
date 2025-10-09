@@ -2,10 +2,11 @@
 // extension-stats-endpoint.php
 // Prosty endpoint do zbierania statystyk wtyczki
 
-header('Content-Type: application/json');
+header('Content-Type: application/json; charset=UTF-8');
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: POST, OPTIONS');
 header('Access-Control-Allow-Headers: Content-Type, Accept');
+mb_internal_encoding('UTF-8');
 
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     exit(0);

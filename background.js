@@ -104,6 +104,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     });
     return true; // Wskazuje, że odpowiedź będzie asynchroniczna
   }
+  // Usunięto obsługę cleanupPendingOrders - teraz działa bezpośrednio z sidebar.js
 });
 
 // Funkcja sprawdzania aktualizacji

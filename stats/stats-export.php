@@ -2,7 +2,8 @@
 // stats-export.php
 // API do eksportu statystyk w formacie JSON
 
-header('Content-Type: application/json');
+header('Content-Type: application/json; charset=UTF-8');
+mb_internal_encoding('UTF-8');
 
 // Proste zabezpieczenie tokenem
 $validToken = 'Ypl2oH4Mu0KXKtX32MgJhFaC59OkFrARRhQWYE58'; // Zmień na swój token!
@@ -40,13 +41,7 @@ foreach ($lines as $line) {
 $totalUsers = count(array_unique(array_column($stats, 'user_hash')));
 $totalOrders = count(array_filter($stats, fn($s) => $s['action'] === 'order_processed'));
 
-$summary = [
-    'total_users' => $totalUsers,
-    'total_orders' => $totalOrders,
-    'last_30_days' => []
-];
-
-// Statystyki z ostatnich 30 dni
+// Oblicz statystyki dzienne
 $dailyStats = [];
 foreach ($stats as $stat) {
     $date = $stat['date'];
@@ -62,7 +57,26 @@ foreach ($stats as $stat) {
     }
 }
 
-$summary['last_30_days'] = array_slice($dailyStats, -30, null, true);
+// Przekształć w tablicę z datami jako wartościami
+$last30DaysArray = [];
+foreach ($dailyStats as $date => $data) {
+    $last30DaysArray[] = [
+        'date' => $date,
+        'users' => $data['users'],
+        'orders' => $data['orders']
+    ];
+}
 
-echo json_encode($summary, JSON_PRETTY_PRINT);
+// Sortuj po dacie (najnowsze pierwsze) i ogranicz do 30 dni
+usort($last30DaysArray, fn($a, $b) => strtotime($b['date']) - strtotime($a['date']));
+$last30DaysArray = array_slice($last30DaysArray, 0, 30);
+
+// Finalna struktura
+$result = [
+    'total_users' => $totalUsers,
+    'total_orders' => $totalOrders,
+    'last_30_days' => $last30DaysArray
+];
+
+echo json_encode($result, JSON_PRETTY_PRINT);
 ?>

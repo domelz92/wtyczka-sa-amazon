@@ -10,7 +10,11 @@ const appState = {
   processMultipleOrders: false, // Nowa flaga do przetwarzania wielu zamówień
   debugMode: false, // Nowa flaga do debugowania
   continuousMode: false, // Nowa flaga do trybu ciągłego
-  lastUpdateCheck: null
+  lastUpdateCheck: null,
+  // Cache dla zamówień Pending
+  pendingOrdersCache: new Set(),
+  pendingCacheTimestamp: null,
+  PENDING_CACHE_DURATION: 3 * 60 * 60 * 1000 // 3 godziny
 };
 
 // Elementy DOM
@@ -47,6 +51,8 @@ document.addEventListener('DOMContentLoaded', function() {
     statusBarText: document.getElementById('status-bar-text'),
     skipProductUpdateCheckbox: document.getElementById('skip-product-update'),
     skipProductPricesCheckbox: document.getElementById('skip-product-prices'),
+    autoCleanupEnabledCheckbox: document.getElementById('autoCleanupEnabled'),
+    ukVatZeroCheckbox: document.getElementById('ukVatZero'),
     
     // Zamówienia
     checkOrdersBtn: document.getElementById('check-orders'),
@@ -63,7 +69,11 @@ document.addEventListener('DOMContentLoaded', function() {
   // Obsługa przełączania zakładek
   elements.tabSettings.addEventListener('click', () => showTab('settings'));
   elements.tabOrders.addEventListener('click', () => showTab('orders'));
-  if (elements.tabChangelog) elements.tabChangelog.addEventListener('click', () => showTab('changelog'));
+  if (elements.tabChangelog) elements.tabChangelog.addEventListener('click', () => {
+    showTab('changelog');
+    // Załaduj changelog gdy użytkownik przełącza na tę zakładkę
+    loadDynamicChangelog();
+  });
   
   // Obsługa zapisywania ustawień
   if (elements.saveSettingsBtn) {
@@ -113,6 +123,26 @@ document.addEventListener('DOMContentLoaded', function() {
     });
     elements.skipProductPricesCheckbox.addEventListener('change', function() {
       chrome.storage.local.set({ skipProductPrices: this.checked });
+    });
+  }
+
+  // Inicjalizacja checkbox'a autoCleanupEnabled
+  if (elements.autoCleanupEnabledCheckbox) {
+    chrome.storage.local.get(['autoCleanupEnabled'], function(result) {
+      elements.autoCleanupEnabledCheckbox.checked = result.autoCleanupEnabled || false;
+    });
+    elements.autoCleanupEnabledCheckbox.addEventListener('change', function() {
+      chrome.storage.local.set({ autoCleanupEnabled: this.checked });
+    });
+  }
+
+  // Inicjalizacja checkbox'a ukVatZero
+  if (elements.ukVatZeroCheckbox) {
+    chrome.storage.local.get(['ukVatZero'], function(result) {
+      elements.ukVatZeroCheckbox.checked = result.ukVatZero || false;
+    });
+    elements.ukVatZeroCheckbox.addEventListener('change', function() {
+      chrome.storage.local.set({ ukVatZero: this.checked });
     });
   }
   
@@ -189,6 +219,9 @@ document.addEventListener('DOMContentLoaded', function() {
   // Wczytaj zapisane ustawienia
   loadSettings();
   
+  // Preloaduj kraje z API na początku sesji (tylko raz)
+  preloadCountriesInBackground();
+  
   // Ustaw wersję w stopce z manifestu
   const manifest = chrome.runtime.getManifest();
   const footerVersion = document.getElementById('footer-version');
@@ -248,7 +281,7 @@ function showTab(tab) {
 
 // Wczytywanie ustawień
 function loadSettings() {
-  chrome.storage.local.get(['apiKey', 'processMultipleOrders', 'apiEndpoint', 'debugMode', 'skipProductUpdate', 'skipProductPrices'], (data) => {
+  chrome.storage.local.get(['apiKey', 'processMultipleOrders', 'apiEndpoint', 'debugMode', 'skipProductUpdate', 'skipProductPrices', 'autoCleanupEnabled', 'ukVatZero'], (data) => {
     if (data.apiKey) elements.apiKeyInput.value = data.apiKey;
     if (data.apiEndpoint) {
       // Usuń https:// lub http:// z początku adresu jeśli istnieje
@@ -266,6 +299,12 @@ function loadSettings() {
     }
     if (elements.skipProductPricesCheckbox) {
       elements.skipProductPricesCheckbox.checked = !!data.skipProductPrices;
+    }
+    if (elements.autoCleanupEnabledCheckbox) {
+      elements.autoCleanupEnabledCheckbox.checked = !!data.autoCleanupEnabled;
+    }
+    if (elements.ukVatZeroCheckbox) {
+      elements.ukVatZeroCheckbox.checked = !!data.ukVatZero;
     }
     // Przycisk trybu ciągłego zawsze startuje jako nieaktywny
     if (elements.continuousModeBtn) {
@@ -287,6 +326,8 @@ function saveSettings() {
   const debugMode = elements.debugModeCheckbox ? elements.debugModeCheckbox.checked : false;
   const skipProductUpdate = elements.skipProductUpdateCheckbox ? elements.skipProductUpdateCheckbox.checked : false;
   const skipProductPrices = elements.skipProductPricesCheckbox ? elements.skipProductPricesCheckbox.checked : false;
+  const autoCleanupEnabled = elements.autoCleanupEnabledCheckbox ? elements.autoCleanupEnabledCheckbox.checked : false;
+  const ukVatZero = elements.ukVatZeroCheckbox ? elements.ukVatZeroCheckbox.checked : false;
   
   // Usuń https:// lub http:// z początku adresu jeśli istnieje
   apiEndpoint = apiEndpoint.replace(/^https?:\/\//, '');
@@ -308,7 +349,9 @@ function saveSettings() {
     processMultipleOrders,
     debugMode,
     skipProductUpdate,
-    skipProductPrices
+    skipProductPrices,
+    autoCleanupEnabled,
+    ukVatZero
   }, () => {
     if (chrome.runtime.lastError) {
       showSettingsMessage(`Błąd zapisywania: ${chrome.runtime.lastError.message}`, 'error');
@@ -423,7 +466,16 @@ async function fetchOrders() {
     
     // Pobierz zamówienia
     appState.orders = await fetchAmazonOrders(apiKey);
+    
+    // Sortuj zamówienia od najniższego ID do najwyższego
+    appState.orders.sort((a, b) => {
+      const idA = parseInt(a.sellasist_order_id) || 0;
+      const idB = parseInt(b.sellasist_order_id) || 0;
+      return idA - idB; // Rosnąco (najniższe pierwsze)
+    });
+    
     appState.totalOrders = appState.orders.length;
+    log(`Zamówienia posortowane od najniższego ID (${appState.orders[0]?.sellasist_order_id}) do najwyższego (${appState.orders[appState.orders.length-1]?.sellasist_order_id})`, 'info');
     
     if (appState.totalOrders === 0) {
       log('Nie znaleziono żadnych zamówień do przetworzenia.', 'warning');
@@ -468,6 +520,16 @@ async function processNextOrder() {
   // Przejdź do następnego zamówienia
   appState.currentOrderIndex++;
   const currentOrder = appState.orders[appState.currentOrderIndex];
+  
+  // NOWE: Sprawdź cache Pending przed otwarciem Amazon
+  const isPendingCached = await isOrderInPendingCache(currentOrder.amazon_order_id);
+  if (isPendingCached) {
+    log(`Zamówienie ${currentOrder.amazon_order_id} w cache jako Pending - pomijam i przechodzę do następnego`, 'info');
+    // Przejdź do następnego zamówienia
+    setTimeout(processNextOrder, 1000);
+    return;
+  }
+  
   const progressPercent = Math.round((appState.currentOrderIndex / appState.totalOrders) * 100);
   
   // Aktualizuj UI
@@ -590,7 +652,23 @@ function handleMessages(message, sender, sendResponse) {
     // Błąd podczas aktualizacji zamówienia
     log(`Błąd podczas aktualizacji zamówienia ${message.orderId}: ${message.error}`, 'error');
     elements.orderStatus.textContent = 'Błąd!';
+  } else if (message.type === 'addToPendingCache') {
+    // Dodaj zamówienie do cache Pending
+    addOrderToPendingCache(message.orderId);
+  } else if (message.type === 'orderSkipped') {
+    // Zamówienie zostało pominięte
+    log(`Zamówienie ${message.orderId} pominięte: ${message.reason}`, 'info');
+    elements.orderStatus.textContent = `Pominięte (${message.reason})`;
   }
+}
+
+// Funkcja do dodawania zamówienia do cache Pending w sidebar
+function addOrderToPendingCache(orderId) {
+  appState.pendingOrdersCache.add(orderId);
+  if (!appState.pendingCacheTimestamp) {
+    appState.pendingCacheTimestamp = Date.now();
+  }
+  log(`Dodano zamówienie ${orderId} do cache Pending (na 3h)`, 'debug');
 }
 
 // Zmodyfikowana funkcja log z deduplikacją
@@ -631,7 +709,7 @@ function getStoredData(keys) {
   });
 }
 
-// Pobieranie zamówień Amazon z API
+// Pobieranie zamówień Amazon z API - z filtrowaniem Pending
 async function fetchAmazonOrders(apiKey) {
   const { apiEndpoint } = await getStoredData(['apiEndpoint']);
   if (!apiEndpoint) {
@@ -668,6 +746,7 @@ async function fetchAmazonOrders(apiKey) {
     throw new Error('Nieprawidłowy format danych zwróconych z API');
   }
   
+  // Zwróć wszystkie zamówienia - filtrowanie odbywa się później na Amazon
   return orders;
 }
 
@@ -1046,9 +1125,143 @@ async function checkForUpdatesAndFooter() {
   }
 }
 
+// Funkcja sprawdzająca czy zamówienie jest w cache Pending - lokalny cache
+function isOrderInPendingCache(orderId) {
+  try {
+    const now = Date.now();
+    
+    // Sprawdź czy cache jest aktualny
+    if (appState.pendingCacheTimestamp && (now - appState.pendingCacheTimestamp > appState.PENDING_CACHE_DURATION)) {
+      // Cache wygasł - wyczyść
+      appState.pendingOrdersCache.clear();
+      appState.pendingCacheTimestamp = null;
+      log('Cache zamówień Pending wygasł - wyczyszczono', 'debug');
+      return false;
+    }
+    
+    // Sprawdź czy zamówienie jest w cache
+    const isPending = appState.pendingOrdersCache.has(orderId);
+    if (isPending) {
+      const minutesLeft = Math.round((appState.PENDING_CACHE_DURATION - (now - appState.pendingCacheTimestamp)) / 1000 / 60);
+      log(`Zamówienie ${orderId} w cache jako Pending - pomijam (sprawdzę ponownie za ${minutesLeft} min)`, 'info');
+    }
+    
+    return isPending;
+  } catch (error) {
+    log(`Błąd sprawdzania cache Pending: ${error.message}`, 'error');
+    return false;
+  }
+}
+
+// Cache dla changelog
+let changelogCache = null;
+let changelogCacheTime = null;
+const CHANGELOG_CACHE_DURATION = 5 * 60 * 1000; // 5 minut
+
+// Funkcja do wyświetlania changelog
+function displayChangelog(changelogData) {
+  const changelogContent = document.getElementById('changelog-content');
+  const changelogLoading = document.getElementById('changelog-loading');
+  const changelogFallback = document.getElementById('changelog-fallback');
+  
+  // Generuj HTML dla każdej wersji
+  let htmlContent = '';
+  
+  changelogData.versions.forEach((version, index) => {
+    const colorClass = index === 0 ? '#009244' : '#1976d2'; // Pierwsza wersja zielona, reszta niebieska
+    const changes = version.changes.map(change => `<li>${change}</li>`).join('');
+    
+    htmlContent += `
+      <div style="margin-bottom:16px; padding:12px; background:#f8f9fa; border-radius:6px; border-left:4px solid ${colorClass};">
+        <div style="font-weight:bold; color:${colorClass}; font-size:16px; margin-bottom:4px;">Wersja ${version.version}</div>
+        <div style="color:#666; font-size:13px; margin-bottom:8px;">${version.date}</div>
+        <ul style="margin:8px 0 0 18px; padding:0; font-size:14px; color:#222;">
+          ${changes}
+        </ul>
+      </div>
+    `;
+  });
+  
+  changelogContent.innerHTML = htmlContent;
+  changelogLoading.style.display = 'none';
+  changelogContent.style.display = 'block';
+  changelogFallback.style.display = 'none';
+}
+
+// Funkcja do ładowania changelog z serwera
+async function loadDynamicChangelog(forceReload = false) {
+  // Sprawdź cache jeśli nie wymuszamy przeładowania
+  if (!forceReload && changelogCache && changelogCacheTime && 
+      (Date.now() - changelogCacheTime < CHANGELOG_CACHE_DURATION)) {
+    console.log('Używam cache changelog');
+    displayChangelog(changelogCache);
+    return;
+  }
+  
+  try {
+    const response = await fetch('https://appsbusters.pl/changelog/wtyczka-sa-amazon.json?t=' + Date.now());
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    
+    const changelogData = await response.json();
+    
+    if (changelogData && changelogData.versions && Array.isArray(changelogData.versions)) {
+      // Zapisz do cache
+      changelogCache = changelogData;
+      changelogCacheTime = Date.now();
+      
+      displayChangelog(changelogData);
+      console.log('Changelog załadowany dynamicznie z serwera');
+    } else {
+      throw new Error('Nieprawidłowy format danych changelog');
+    }
+    
+  } catch (error) {
+    console.log('Błąd ładowania changelog z serwera:', error.message, '- używam fallback');
+    
+    // Pokaż statyczny fallback
+    const changelogLoading = document.getElementById('changelog-loading');
+    const changelogFallback = document.getElementById('changelog-fallback');
+    
+    changelogLoading.style.display = 'none';
+    changelogFallback.style.display = 'block';
+  }
+}
+
+// Funkcja do preloadowania krajów w tle (wykonuje się tylko raz przy otwarciu sidebar)
+async function preloadCountriesInBackground() {
+  try {
+    const { apiKey, apiEndpoint } = await getStoredData(['apiKey', 'apiEndpoint']);
+    if (!apiKey || !apiEndpoint) {
+      // Brak konfiguracji - kraje zostaną pobrane przy pierwszym zamówieniu
+      return;
+    }
+
+    // Wyślij żądanie do content script żeby preloadował kraje
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (tabs[0]) {
+        chrome.tabs.sendMessage(tabs[0].id, { 
+          type: 'preloadCountries',
+          apiKey: apiKey,
+          apiEndpoint: apiEndpoint
+        }, (response) => {
+          if (response && response.success) {
+            log(`Preloadowano ${response.count} krajów do cache`, 'debug');
+          }
+        });
+      }
+    });
+    
+  } catch (error) {
+    // Ignoruj błędy preloadowania - nie są krytyczne
+  }
+}
+
 // Automatyczne sprawdzanie przy otwarciu sidebara
 window.addEventListener('DOMContentLoaded', () => {
   checkForUpdatesAndFooter();
+  loadDynamicChangelog(); // Załaduj changelog z serwera
 
   // Dodaj globalny nasłuchiwacz na kliknięcia przycisków w sidebarze
   document.body.addEventListener('click', (e) => {

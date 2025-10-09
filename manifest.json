@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Wtyczka Amazon - Sellasist",
-  "version": "1.06",
+  "version": "1.10",
   "description": "Wtyczka do scrapowania zamówień z Amazon Seller Central i przesyłania ich do Sellasist.",
   "permissions": [
     "storage",
@@ -14,6 +14,10 @@
     "https://sellercentral.amazon.com/*",
     "https://sellercentral.amazon.de/*",
     "https://sellercentral.amazon.co.uk/*",
+    "https://sellercentral.amazon.se/*",
+    "https://sellercentral.amazon.fr/*",
+    "https://sellercentral.amazon.es/*",
+    "https://sellercentral.amazon.it/*",
     "https://appsbusters.pl/*"
   ],
   "background": {
@@ -30,7 +34,11 @@
       "matches": [
         "https://sellercentral.amazon.com/*",
         "https://sellercentral.amazon.de/*",
-        "https://sellercentral.amazon.co.uk/*"
+        "https://sellercentral.amazon.co.uk/*",
+        "https://sellercentral.amazon.se/*",
+        "https://sellercentral.amazon.fr/*",
+        "https://sellercentral.amazon.es/*",
+        "https://sellercentral.amazon.it/*"
       ],
       "js": ["content.js"]
     }

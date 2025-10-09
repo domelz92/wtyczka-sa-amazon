@@ -383,6 +383,11 @@
         <input type="checkbox" id="debugMode"> Tryb debugowania (szczegółowe logi)
       </label>
     </div>
+    <div class="setting-group">
+      <label for="ukVatZero">
+        <input type="checkbox" id="ukVatZero"> UK VAT 0% (używaj ceny netto dla wysyłek do UK)
+      </label>
+    </div>
     <div class="setting-group" style="text-align: center;">
       <button id="save-settings" class="btn btn-primary">Zapisz ustawienia</button>
       <div id="settings-msg" style="margin-top: 8px; font-size: 13px;"></div>
@@ -429,6 +434,22 @@
           <div style="font-weight:bold; color:#8e24aa; font-size:14px; margin-bottom:2px;">Tryb debugowania</div>
           <div style="font-size:13px; color:#222;">
             Po włączeniu tej opcji w logach pojawią się dodatkowe szczegółowe informacje techniczne, przydatne do diagnozowania problemów.
+          </div>
+        </div>
+        <div style="background:#e8f5e9; border-left:5px solid #009244; border-radius:6px; margin-bottom:10px; padding:7px 10px;">
+          <div style="font-weight:bold; color:#009244; font-size:14px; margin-bottom:2px;">Automatyczne czyszczenie zamówień Pending</div>
+          <div style="font-size:13px; color:#222;">
+            Automatycznie czyści zamówienia oznaczone jako "Pending" raz na dobę, dzięki czemu Sellasist ponownie je zwraca w endpoincie Amazon gdy dane będą dostępne.
+          </div>
+        </div>
+        <div style="background:#e3f2fd; border-left:5px solid #1976d2; border-radius:6px; padding:7px 10px;">
+          <div style="font-weight:bold; color:#1976d2; font-size:14px; margin-bottom:2px;">UK VAT 0%</div>
+          <div style="font-size:13px; color:#222;">
+            Po włączeniu tej opcji, dla zamówień wysyłanych do UK wtyczka automatycznie:<br>
+            • Ustawi stawkę VAT na 0%<br>
+            • Użyje cen netto zamiast brutto (Amazon pobiera VAT od razu)<br>
+            • Wyciągnie wartość z "Sales proceeds net of VAT" jako podstawę obliczeń<br>
+            Przykład: cena towaru 13,32 GBP (netto), wysyłka 0,41 GBP (netto), razem 13,73 GBP
           </div>
         </div>
       </div>
@@ -479,16 +500,91 @@
   </div>
   
   <div class="tab-content" id="content-changelog">
-    <div style="padding: 12px 8px;">
-      <div style="text-align: center; margin-bottom: 16px;">
-        <button id="check-updates-btn" class="btn btn-secondary">Sprawdź aktualizacje</button>
-        <div id="update-status" style="margin-top: 8px; font-size: 13px;"></div>
+    <div style="display: flex; flex-direction: column; flex: 1; overflow: hidden;">
+      <div style="padding: 12px 8px;">
+        <div style="text-align: center; margin-bottom: 16px;">
+          <button id="check-updates-btn" class="btn btn-secondary">Sprawdź aktualizacje</button>
+          <div id="update-status" style="margin-top: 8px; font-size: 13px;"></div>
+        </div>
+        
+        <h3 style="margin-top:0; color:#009244; font-size:18px; letter-spacing:0.5px;">Changelog</h3>
       </div>
       
-      <h3 style="margin-top:0; color:#009244; font-size:18px; letter-spacing:0.5px;">Changelog</h3>
+      <div id="changelog-loading" style="text-align: center; padding: 20px; color: #666;">
+        Ładowanie changelog...
+      </div>
+      
+      <div id="changelog-content" style="display: none; flex: 1; overflow-y: auto; padding: 0 12px 12px 12px; max-height: none;">
+        <!-- Changelog będzie ładowany dynamicznie -->
+      </div>
+      
+      <!-- Fallback - statyczny changelog na wypadek błędu -->
+      <div id="changelog-fallback" style="display: none; flex: 1; overflow-y: auto; padding: 0 12px 12px 12px; max-height: none;">
+        <div style="margin-bottom:16px; padding:12px; background:#f8f9fa; border-radius:6px; border-left:4px solid #009244;">
+        <div style="font-weight:bold; color:#009244; font-size:16px; margin-bottom:4px;">Wersja 1.09</div>
+        <div style="color:#666; font-size:13px; margin-bottom:8px;">15.09.2025</div>
+        <ul style="margin:8px 0 0 18px; padding:0; font-size:14px; color:#222;">
+          <li><strong>Dodano opcję "UK VAT 0%"</strong> - dla zamówień do UK automatycznie używa cen netto</li>
+          <li>Automatyczne wykrywanie zamówień UK (domena amazon.co.uk, waluta GBP, kod pocztowy UK)</li>
+          <li>Wyciąganie wartości z "Sales proceeds net of VAT" jako podstawy obliczeń dla UK</li>
+          <li>Używanie cen z kolumny "Unit price (VAT exclusive)" dla produktów UK</li>
+          <li>Automatyczne obliczanie kosztów wysyłki netto dla zamówień UK</li>
+          <li>Ustawienie stawki VAT na 0% dla wszystkich produktów w zamówieniach UK</li>
+          <li><strong>Automatyczne wykrywanie i stosowanie promocji</strong></li>
+          <li>Wtyczka automatycznie wykrywa promocje w kolumnie "Proceeds"</li>
+          <li>Oblicza rzeczywistą cenę jednostkową po promocji (np. 24,81€ ÷ 3 = 8,27€ zamiast 8,99€)</li>
+          <li>Wyciąga kwotę promocji z pola "Promotion" i "Item total"</li>
+          <li>Dodaje informacje o promocji do szczegółów produktu</li>
+          <li>Logowanie informacji o zastosowanych promocjach</li>
+        </ul>
+      </div>
+      
+      <div style="margin-bottom:16px; padding:12px; background:#f8f9fa; border-radius:6px; border-left:4px solid #1976d2;">
+        <div style="font-weight:bold; color:#1976d2; font-size:16px; margin-bottom:4px;">Wersja 1.08</div>
+        <div style="color:#666; font-size:13px; margin-bottom:8px;">15.09.2025</div>
+        <ul style="margin:8px 0 0 18px; padding:0; font-size:14px; color:#222;">
+          <li>Naprawiono dynamiczne wykrywanie walut z elementów DOM Amazon (np. "30,99 GBP")</li>
+          <li>Dodano sprawdzanie obsługiwanych walut - przerywa przetwarzanie przy nieznanych walutach</li>
+          <li>Naprawiono błędne obliczanie Grand Total - nie dodaje już podwójnie kosztów wysyłki</li>
+          <li>Priorytet wykrywania walut: tabele podsumowania → elementy DOM → tekst strony → URL</li>
+          <li>Ulepszone komunikaty błędów dla nieobsługiwanych walut z listą obsługiwanych</li>
+          <li>Naprawiono oznaczanie zamówień w toku - zamiast "Order Canceled" używa "Order Pending"</li>
+          <li>Rozróżnienie między zamówieniami w toku, anulowanymi i z błędami danych</li>
+          <li>Dodano funkcję czyszczenia zamówień Pending - resetuje pola aby Sellasist ponownie je zwrócił</li>
+          <li>Przycisk "Wyczyść zamówienia Pending" do ręcznego uruchamiania</li>
+          <li>Automatyczne czyszczenie zamówień Pending raz na dobę (opcjonalne)</li>
+          <li>Dodano pełną obsługę wszystkich walut Amazon (SEK, NOK, DKK, CHF, CAD, AUD, JPY, CZK, HUF, RON, BGN)</li>
+        </ul>
+      </div>
+      
+      <div style="margin-bottom:16px; padding:12px; background:#f8f9fa; border-radius:6px; border-left:4px solid #1976d2;">
+        <div style="font-weight:bold; color:#1976d2; font-size:16px; margin-bottom:4px;">Wersja 1.07</div>
+        <div style="color:#666; font-size:13px; margin-bottom:8px;">9.09.2025</div>
+        <ul style="margin:8px 0 0 18px; padding:0; font-size:14px; color:#222;">
+          <li>Wersja bazowa z pełną funkcjonalnością scrapowania zamówień Amazon</li>
+          <li>Integracja z API Sellasist</li>
+          <li>Obsługa różnych walut i krajów</li>
+          <li>Tryb ciągły i przetwarzanie wielu zamówień</li>
+        </ul>
+      </div>
       
       <div style="margin-bottom:16px; padding:12px; background:#f8f9fa; border-radius:6px; border-left:4px solid #009244;">
-        <div style="font-weight:bold; color:#009244; font-size:16px; margin-bottom:4px;">Wersja 1.06</div>
+        <div style="font-weight:bold; color:#009244; font-size:16px; margin-bottom:4px;">Wersja 1.10</div>
+        <div style="color:#666; font-size:13px; margin-bottom:8px;">28.08.2025</div>
+        <ul style="margin:8px 0 0 18px; padding:0; font-size:14px; color:#222;">
+          <li>Dodano inteligentny cache dla zamówień Pending (3h)</li>
+          <li>Usunięto funkcję czyszczenia Pending - wtyczka teraz je ignoruje</li>
+          <li>Dodano obsługę transakcji WDT 0% VAT dla B2B</li>
+          <li>Poprawiono mapowanie produktów przy wielu pozycjach</li>
+          <li>Dodano obsługę Amazon Szwecja (SEK)</li>
+          <li>Zoptymalizowano cache krajów - pobieranie raz na 24h</li>
+          <li>Rozdzielono obsługę zamówień anulowanych i pending</li>
+          <li>Sortowanie zamówień od najstarszych do najnowszych</li>
+        </ul>
+      </div>
+      
+      <div style="margin-bottom:16px; padding:12px; background:#f8f9fa; border-radius:6px; border-left:4px solid #1976d2;">
+        <div style="font-weight:bold; color:#1976d2; font-size:16px; margin-bottom:4px;">Wersja 1.06</div>
         <div style="color:#666; font-size:13px; margin-bottom:8px;">28.08.2025</div>
         <ul style="margin:8px 0 0 18px; padding:0; font-size:14px; color:#222;">
           <li>Poprawiono wykrywanie krajów - teraz działa z każdym panelem Sellasist</li>
@@ -552,7 +648,8 @@
           <li>Dodano zakładkę Changelog w sidebarze</li>
         </ul>
       </div>
-    </div>
+      </div> <!-- koniec changelog-fallback -->
+    </div> <!-- koniec głównego kontenera changelog -->
   </div>
   
   <script src="sidebar.js"></script>
