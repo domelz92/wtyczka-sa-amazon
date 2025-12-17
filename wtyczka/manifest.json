@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Wtyczka Amazon - Sellasist",
-  "version": "1.10",
+  "version": "1.11",
   "description": "Wtyczka do scrapowania zamówień z Amazon Seller Central i przesyłania ich do Sellasist.",
   "permissions": [
     "storage",

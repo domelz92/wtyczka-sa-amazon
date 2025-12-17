@@ -374,13 +374,8 @@
       </label>
     </div>
     <div class="setting-group">
-      <label for="skip-product-prices">
-        <input type="checkbox" id="skip-product-prices"> Nie aktualizuj cen produktów, tylko szczegóły i dane kontaktowe
-      </label>
-    </div>
-    <div class="setting-group">
-      <label for="debugMode">
-        <input type="checkbox" id="debugMode"> Tryb debugowania (szczegółowe logi)
+      <label for="skipProductPrices">
+        <input type="checkbox" id="skip-product-prices"> Nie aktualizuj cen produktów
       </label>
     </div>
     <div class="setting-group">
@@ -388,7 +383,12 @@
         <input type="checkbox" id="ukVatZero"> UK VAT 0% (używaj ceny netto dla wysyłek do UK)
       </label>
     </div>
-    <div class="setting-group" style="text-align: center;">
+    <div class="setting-group">
+      <label for="debugMode">
+        <input type="checkbox" id="debugMode"> Tryb debugowania (szczegółowe logi)
+      </label>
+    </div>
+        <div class="setting-group" style="text-align: center;">
       <button id="save-settings" class="btn btn-primary">Zapisz ustawienia</button>
       <div id="settings-msg" style="margin-top: 8px; font-size: 13px;"></div>
     </div>
@@ -436,22 +436,8 @@
             Po włączeniu tej opcji w logach pojawią się dodatkowe szczegółowe informacje techniczne, przydatne do diagnozowania problemów.
           </div>
         </div>
-        <div style="background:#e8f5e9; border-left:5px solid #009244; border-radius:6px; margin-bottom:10px; padding:7px 10px;">
-          <div style="font-weight:bold; color:#009244; font-size:14px; margin-bottom:2px;">Automatyczne czyszczenie zamówień Pending</div>
-          <div style="font-size:13px; color:#222;">
-            Automatycznie czyści zamówienia oznaczone jako "Pending" raz na dobę, dzięki czemu Sellasist ponownie je zwraca w endpoincie Amazon gdy dane będą dostępne.
-          </div>
-        </div>
         <div style="background:#e3f2fd; border-left:5px solid #1976d2; border-radius:6px; padding:7px 10px;">
-          <div style="font-weight:bold; color:#1976d2; font-size:14px; margin-bottom:2px;">UK VAT 0%</div>
-          <div style="font-size:13px; color:#222;">
-            Po włączeniu tej opcji, dla zamówień wysyłanych do UK wtyczka automatycznie:<br>
-            • Ustawi stawkę VAT na 0%<br>
-            • Użyje cen netto zamiast brutto (Amazon pobiera VAT od razu)<br>
-            • Wyciągnie wartość z "Sales proceeds net of VAT" jako podstawę obliczeń<br>
-            Przykład: cena towaru 13,32 GBP (netto), wysyłka 0,41 GBP (netto), razem 13,73 GBP
           </div>
-        </div>
       </div>
 
       <div style="margin-bottom:18px;">
@@ -569,7 +555,7 @@
       </div>
       
       <div style="margin-bottom:16px; padding:12px; background:#f8f9fa; border-radius:6px; border-left:4px solid #009244;">
-        <div style="font-weight:bold; color:#009244; font-size:16px; margin-bottom:4px;">Wersja 1.10</div>
+        <div style="font-weight:bold; color:#009244; font-size:16px; margin-bottom:4px;">Wersja 1.10.1</div>
         <div style="color:#666; font-size:13px; margin-bottom:8px;">28.08.2025</div>
         <ul style="margin:8px 0 0 18px; padding:0; font-size:14px; color:#222;">
           <li>Dodano inteligentny cache dla zamówień Pending (3h)</li>

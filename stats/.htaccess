@@ -6,6 +6,12 @@
     Deny from all
 </Files>
 
+# Zezwól na dostęp do debug logs CSV
+<Files "extension_debug_logs.csv">
+    Order Allow,Deny
+    Allow from all
+</Files>
+
 <Files "*.tmp">
     Order Allow,Deny
     Deny from all
@@ -31,13 +37,13 @@
 </Files>
 
 # Ogranicz dostęp tylko do określonych plików
-<FilesMatch "^(stats-dashboard|stats-export|extension-stats-endpoint)\.php$">
+<FilesMatch "^(stats-dashboard|stats-export|extension-stats-endpoint|extension-debug-logs|download-and-clear-logs)\.php$">
     Order Allow,Deny
     Allow from all
 </FilesMatch>
 
-# Zablokuj wszystko inne
-<FilesMatch "^(?!(stats-dashboard|stats-export|extension-stats-endpoint)\.php$).*">
+# Zablokuj wszystko else
+<FilesMatch "^(?!(stats-dashboard|stats-export|extension-stats-endpoint|extension-debug-logs|download-and-clear-logs)\.php$|extension_debug_logs\.csv$).*">
     Order Allow,Deny
     Deny from all
 </FilesMatch>

@@ -11,10 +11,6 @@ const appState = {
   debugMode: false, // Nowa flaga do debugowania
   continuousMode: false, // Nowa flaga do trybu ciągłego
   lastUpdateCheck: null,
-  // Cache dla zamówień Pending
-  pendingOrdersCache: new Set(),
-  pendingCacheTimestamp: null,
-  PENDING_CACHE_DURATION: 3 * 60 * 60 * 1000 // 3 godziny
 };
 
 // Elementy DOM
@@ -51,7 +47,6 @@ document.addEventListener('DOMContentLoaded', function() {
     statusBarText: document.getElementById('status-bar-text'),
     skipProductUpdateCheckbox: document.getElementById('skip-product-update'),
     skipProductPricesCheckbox: document.getElementById('skip-product-prices'),
-    autoCleanupEnabledCheckbox: document.getElementById('autoCleanupEnabled'),
     ukVatZeroCheckbox: document.getElementById('ukVatZero'),
     
     // Zamówienia
@@ -126,16 +121,6 @@ document.addEventListener('DOMContentLoaded', function() {
     });
   }
 
-  // Inicjalizacja checkbox'a autoCleanupEnabled
-  if (elements.autoCleanupEnabledCheckbox) {
-    chrome.storage.local.get(['autoCleanupEnabled'], function(result) {
-      elements.autoCleanupEnabledCheckbox.checked = result.autoCleanupEnabled || false;
-    });
-    elements.autoCleanupEnabledCheckbox.addEventListener('change', function() {
-      chrome.storage.local.set({ autoCleanupEnabled: this.checked });
-    });
-  }
-
   // Inicjalizacja checkbox'a ukVatZero
   if (elements.ukVatZeroCheckbox) {
     chrome.storage.local.get(['ukVatZero'], function(result) {
@@ -145,6 +130,7 @@ document.addEventListener('DOMContentLoaded', function() {
       chrome.storage.local.set({ ukVatZero: this.checked });
     });
   }
+
   
   // Obsługa przycisku trybu ciągłego
   if (elements.continuousModeBtn) {
@@ -281,7 +267,7 @@ function showTab(tab) {
 
 // Wczytywanie ustawień
 function loadSettings() {
-  chrome.storage.local.get(['apiKey', 'processMultipleOrders', 'apiEndpoint', 'debugMode', 'skipProductUpdate', 'skipProductPrices', 'autoCleanupEnabled', 'ukVatZero'], (data) => {
+  chrome.storage.local.get(['apiKey', 'processMultipleOrders', 'apiEndpoint', 'debugMode', 'skipProductUpdate', 'skipProductPrices', 'ukVatZero'], (data) => {
     if (data.apiKey) elements.apiKeyInput.value = data.apiKey;
     if (data.apiEndpoint) {
       // Usuń https:// lub http:// z początku adresu jeśli istnieje
@@ -300,11 +286,11 @@ function loadSettings() {
     if (elements.skipProductPricesCheckbox) {
       elements.skipProductPricesCheckbox.checked = !!data.skipProductPrices;
     }
-    if (elements.autoCleanupEnabledCheckbox) {
-      elements.autoCleanupEnabledCheckbox.checked = !!data.autoCleanupEnabled;
-    }
     if (elements.ukVatZeroCheckbox) {
       elements.ukVatZeroCheckbox.checked = !!data.ukVatZero;
+    }
+    if (elements.autoCleanupEnabledCheckbox) {
+      elements.autoCleanupEnabledCheckbox.checked = !!data.autoCleanupEnabled;
     }
     // Przycisk trybu ciągłego zawsze startuje jako nieaktywny
     if (elements.continuousModeBtn) {
@@ -319,14 +305,13 @@ function loadSettings() {
 }
 
 // Zapisywanie ustawień
-function saveSettings() {
+async function saveSettings() {
   const apiKey = elements.apiKeyInput.value.trim();
   let apiEndpoint = elements.apiEndpointInput.value.trim();
   const processMultipleOrders = elements.processMultipleOrdersCheckbox ? elements.processMultipleOrdersCheckbox.checked : false;
   const debugMode = elements.debugModeCheckbox ? elements.debugModeCheckbox.checked : false;
   const skipProductUpdate = elements.skipProductUpdateCheckbox ? elements.skipProductUpdateCheckbox.checked : false;
   const skipProductPrices = elements.skipProductPricesCheckbox ? elements.skipProductPricesCheckbox.checked : false;
-  const autoCleanupEnabled = elements.autoCleanupEnabledCheckbox ? elements.autoCleanupEnabledCheckbox.checked : false;
   const ukVatZero = elements.ukVatZeroCheckbox ? elements.ukVatZeroCheckbox.checked : false;
   
   // Usuń https:// lub http:// z początku adresu jeśli istnieje
@@ -350,22 +335,65 @@ function saveSettings() {
     debugMode,
     skipProductUpdate,
     skipProductPrices,
-    autoCleanupEnabled,
     ukVatZero
-  }, () => {
+  }, async () => {
     if (chrome.runtime.lastError) {
       showSettingsMessage(`Błąd zapisywania: ${chrome.runtime.lastError.message}`, 'error');
       return;
     }
     
-    showSettingsMessage('Ustawienia zostały zapisane!', 'success');
+    showSettingsMessage('Ustawienia zapisane. Sprawdzam połączenie...', 'info');
     
     // Aktualizacja stanu aplikacji
     appState.processMultipleOrders = processMultipleOrders;
     appState.debugMode = debugMode;
     appState.skipProductUpdate = skipProductUpdate;
     appState.skipProductPrices = skipProductPrices;
+    
+    // Sprawdź połączenie z API
+    await testApiConnection(apiKey, apiEndpoint);
   });
+}
+
+// Funkcja testująca połączenie z API
+async function testApiConnection(apiKey, apiEndpoint) {
+  try {
+    const url = `https://${apiEndpoint}/api/v1/amazon`;
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'accept': 'application/json',
+        'apiKey': apiKey,
+        'Content-Type': 'application/json'
+      }
+    });
+    
+    if (response.ok) {
+      showSettingsMessage('✓ Połączenie z API działa poprawnie!', 'success');
+    } else if (response.status === 401) {
+      const errorText = await response.text();
+      if (errorText.includes('Unknown user')) {
+        showSettingsMessage('✗ Błąd: Nieprawidłowy klucz API', 'error');
+      } else {
+        showSettingsMessage('✗ Błąd autoryzacji (401)', 'error');
+      }
+    } else if (response.status === 404) {
+      const errorText = await response.text();
+      if (errorText.includes('No records found')) {
+        showSettingsMessage('✓ Połączenie działa (brak zamówień do przetworzenia)', 'success');
+      } else {
+        showSettingsMessage('✗ Błąd: Endpoint nie znaleziony (404)', 'error');
+      }
+    } else {
+      showSettingsMessage(`✗ Błąd połączenia: HTTP ${response.status}`, 'error');
+    }
+  } catch (error) {
+    if (error.message.includes('Failed to fetch')) {
+      showSettingsMessage('✗ Błąd: Nie można połączyć się z serwerem. Sprawdź adres API.', 'error');
+    } else {
+      showSettingsMessage(`✗ Błąd połączenia: ${error.message}`, 'error');
+    }
+  }
 }
 
 // Funkcja pomocnicza do wyświetlania komunikatów w ustawieniach
@@ -521,15 +549,6 @@ async function processNextOrder() {
   appState.currentOrderIndex++;
   const currentOrder = appState.orders[appState.currentOrderIndex];
   
-  // NOWE: Sprawdź cache Pending przed otwarciem Amazon
-  const isPendingCached = await isOrderInPendingCache(currentOrder.amazon_order_id);
-  if (isPendingCached) {
-    log(`Zamówienie ${currentOrder.amazon_order_id} w cache jako Pending - pomijam i przechodzę do następnego`, 'info');
-    // Przejdź do następnego zamówienia
-    setTimeout(processNextOrder, 1000);
-    return;
-  }
-  
   const progressPercent = Math.round((appState.currentOrderIndex / appState.totalOrders) * 100);
   
   // Aktualizuj UI
@@ -581,7 +600,8 @@ async function processNextOrder() {
       }, 2000);
     } else {
       // Przejdź do kolejnego zamówienia po krótkim odstępie
-      setTimeout(processNextOrder, 3000); // Dłuższy odstęp czasu między zamówieniami
+      // ZWIĘKSZONO CZAS: Daje to więcej czasu na załadowanie następnej strony
+      setTimeout(processNextOrder, 5000); // 5 sekund między zamówieniami
     }
     
   } catch (error) {
@@ -598,7 +618,7 @@ async function processNextOrder() {
     } else {
       // Pomimo błędu, przechodzimy do następnego zamówienia po dłuższym odstępie
       log('Przechodzę do następnego zamówienia mimo błędu...', 'warning');
-      setTimeout(processNextOrder, 5000); // Jeszcze dłuższy odstęp po błędzie
+      setTimeout(processNextOrder, 7000); // 7 sekund po błędzie - daje więcej czasu na odzyskanie
     }
   }
 }
@@ -652,9 +672,6 @@ function handleMessages(message, sender, sendResponse) {
     // Błąd podczas aktualizacji zamówienia
     log(`Błąd podczas aktualizacji zamówienia ${message.orderId}: ${message.error}`, 'error');
     elements.orderStatus.textContent = 'Błąd!';
-  } else if (message.type === 'addToPendingCache') {
-    // Dodaj zamówienie do cache Pending
-    addOrderToPendingCache(message.orderId);
   } else if (message.type === 'orderSkipped') {
     // Zamówienie zostało pominięte
     log(`Zamówienie ${message.orderId} pominięte: ${message.reason}`, 'info');
@@ -662,14 +679,6 @@ function handleMessages(message, sender, sendResponse) {
   }
 }
 
-// Funkcja do dodawania zamówienia do cache Pending w sidebar
-function addOrderToPendingCache(orderId) {
-  appState.pendingOrdersCache.add(orderId);
-  if (!appState.pendingCacheTimestamp) {
-    appState.pendingCacheTimestamp = Date.now();
-  }
-  log(`Dodano zamówienie ${orderId} do cache Pending (na 3h)`, 'debug');
-}
 
 // Zmodyfikowana funkcja log z deduplikacją
 function log(message, level = 'info') {
@@ -709,14 +718,14 @@ function getStoredData(keys) {
   });
 }
 
-// Pobieranie zamówień Amazon z API - z filtrowaniem Pending
+// Pobieranie zamówień Amazon z API
 async function fetchAmazonOrders(apiKey) {
   const { apiEndpoint } = await getStoredData(['apiEndpoint']);
   if (!apiEndpoint) {
     throw new Error('Endpoint API nie został ustawiony');
   }
   
-  const url = `https://${apiEndpoint}/api/v1/amazon`;
+  const url = `https://${apiEndpoint}/api/v1/amazon?paid=true`;
   const response = await fetch(url, {
     method: 'GET',
     headers: {
@@ -789,22 +798,29 @@ async function navigateToAmazonOrder(amazonOrderId) {
   return new Promise(async (resolve, reject) => {
     const url = `https://sellercentral.amazon.de/orders-v3/order/${amazonOrderId}`;
     
+    log(`=== NAWIGACJA DO ZAMÓWIENIA ${amazonOrderId} ===`, 'info');
+    log(`URL docelowy: ${url}`, 'debug');
+    
     try {
       // Jeśli mamy już otwartą kartę Amazon, użyj jej
       if (appState.amazonTabId) {
         // Sprawdź czy karta nadal istnieje
         try {
-          await chrome.tabs.get(appState.amazonTabId);
+          const existingTab = await chrome.tabs.get(appState.amazonTabId);
+          log(`Znaleziono istniejącą kartę Amazon (ID: ${appState.amazonTabId})`, 'debug');
+          log(`Aktualny URL karty: ${existingTab.url}`, 'debug');
           
           // Zaktualizuj URL w istniejącej karcie
-          log(`Używam istniejącej karty (ID: ${appState.amazonTabId}) i aktualizuję URL...`, 'info');
+          log(`Aktualizuję URL karty na: ${url}`, 'info');
           await chrome.tabs.update(appState.amazonTabId, { url, active: true });
           
           // Czekaj na załadowanie strony
+          log(`Czekam na załadowanie strony zamówienia ${amazonOrderId}...`, 'info');
           await waitForTabLoad(appState.amazonTabId);
           
           // Pobierz aktualne informacje o karcie
           const tab = await chrome.tabs.get(appState.amazonTabId);
+          log(`✓ Strona załadowana: ${tab.url}`, 'success');
           resolve(tab);
           return;
         } catch (e) {
@@ -839,12 +855,27 @@ async function navigateToAmazonOrder(amazonOrderId) {
 // Czekaj na załadowanie strony
 function waitForTabLoad(tabId) {
   return new Promise((resolve, reject) => {
-    function listener(currentTabId, changeInfo) {
-      if (currentTabId === tabId && changeInfo.status === 'complete') {
-        chrome.tabs.onUpdated.removeListener(listener);
+    let loadStartTime = Date.now();
+    
+    function listener(currentTabId, changeInfo, tab) {
+      if (currentTabId === tabId) {
+        if (changeInfo.status === 'loading') {
+          log(`Strona zaczyna się ładować... (${tab.url})`, 'debug');
+        }
         
-        // Daj stronie dodatkowy czas na wyrenderowanie DOM (1 sekunda)
-        setTimeout(resolve, 1000);
+        if (changeInfo.status === 'complete') {
+          const loadTime = Date.now() - loadStartTime;
+          log(`Strona załadowana w ${loadTime}ms`, 'debug');
+          chrome.tabs.onUpdated.removeListener(listener);
+          
+          // Daj stronie dodatkowy czas na wyrenderowanie DOM (2 sekundy)
+          // ZWIĘKSZONO z 1s do 2s dla pewności
+          log(`Czekam dodatkowe 2 sekundy na wyrenderowanie DOM...`, 'debug');
+          setTimeout(() => {
+            log(`✓ Strona gotowa do scrapowania`, 'success');
+            resolve();
+          }, 2000);
+        }
       }
     }
     
@@ -853,6 +884,7 @@ function waitForTabLoad(tabId) {
     // Ustaw timeout
     setTimeout(() => {
       chrome.tabs.onUpdated.removeListener(listener);
+      log(`⚠ Timeout: Strona nie załadowała się w 30 sekund`, 'warning');
       reject(new Error('Timeout: Strona Amazona nie załadowała się w oczekiwanym czasie'));
     }, 30000);
   });
@@ -1125,33 +1157,6 @@ async function checkForUpdatesAndFooter() {
   }
 }
 
-// Funkcja sprawdzająca czy zamówienie jest w cache Pending - lokalny cache
-function isOrderInPendingCache(orderId) {
-  try {
-    const now = Date.now();
-    
-    // Sprawdź czy cache jest aktualny
-    if (appState.pendingCacheTimestamp && (now - appState.pendingCacheTimestamp > appState.PENDING_CACHE_DURATION)) {
-      // Cache wygasł - wyczyść
-      appState.pendingOrdersCache.clear();
-      appState.pendingCacheTimestamp = null;
-      log('Cache zamówień Pending wygasł - wyczyszczono', 'debug');
-      return false;
-    }
-    
-    // Sprawdź czy zamówienie jest w cache
-    const isPending = appState.pendingOrdersCache.has(orderId);
-    if (isPending) {
-      const minutesLeft = Math.round((appState.PENDING_CACHE_DURATION - (now - appState.pendingCacheTimestamp)) / 1000 / 60);
-      log(`Zamówienie ${orderId} w cache jako Pending - pomijam (sprawdzę ponownie za ${minutesLeft} min)`, 'info');
-    }
-    
-    return isPending;
-  } catch (error) {
-    log(`Błąd sprawdzania cache Pending: ${error.message}`, 'error');
-    return false;
-  }
-}
 
 // Cache dla changelog
 let changelogCache = null;

@@ -1,6 +1,49 @@
 {
   "versions": [
     {
+      "version": "1.11",
+      "date": "16.12.2025",
+      "changes": [
+        "<strong>Naprawiono kwoty zamówień UK/GBP</strong> - produkty są teraz aktualizowane z cenami netto i VAT 0%",
+        "<strong>Naprawiono parsowanie adresów niemieckich</strong> - firmy (np. Dentohaus) nie są już mylone z ulicami",
+        "<strong>Naprawiono formatowanie telefonów</strong> - usuwanie wiodącego 0 przed dodaniem prefixu kraju (+32, +33, +44)",
+        "<strong>Naprawiono adresy francuskie</strong> - pomijanie kodów domofonu i nazw budynków (Bloc, Résidence)",
+        "<strong>Naprawiono adresy włoskie</strong> - pomijanie instrukcji piętra (Primo piano, Interno)",
+        "<strong>Naprawiono adresy UK</strong> - FLAT z suffixem ulicy (VALE, POINT) używany jako ulica"
+      ]
+    },
+    {
+      "version": "1.10.2",
+      "date": "04.12.2025",
+      "changes": [
+        "<strong>Naprawiono przetwarzanie zamówień z Wielkiej Brytanii</strong> - przywrócono opcję UK VAT 0% dla zamówień do UK",
+        "<strong>Dodano opcję 'UK VAT 0%' w ustawieniach</strong> - umożliwia włączenie zerowego VATu dla zamówień brytyjskich",
+        "<strong>Poprawiono wykrywanie krajów</strong> - naprawiono problemy z zamówieniami z Belgii",
+        "<strong>Lepszy interfejs</strong> - ograniczono ilość komunikatów pokazywanych użytkownikowi",
+        "<strong>Poprawki stabilności</strong> - naprawiono błędy w obliczaniu VAT i cen"
+      ]
+    },
+    {
+      "version": "1.10.1",
+      "date": "02.12.2025",
+      "changes": [
+        "<strong>Poprawiono logowanie</strong> - lepsze śledzenie zmian w zamówieniach",
+        "<strong>Naprawiono aktualizacje cen</strong> - opcja zachowania istniejących cen produktów",
+        "<strong>Poprawki stabilności</strong> - naprawiono błędy w systemie logowania"
+      ]
+    },
+    {
+      "version": "1.10",
+      "date": "22.11.2025",
+      "changes": [
+        "<strong>Naprawiono szwedzki rynek</strong> - poprawne wykrywanie waluty SEK",
+        "<strong>Poprawiono koszty wysyłki</strong> - lepsza obsługa promocji darmowej wysyłki",
+        "<strong>Ulepszone zamówienia wieloproduktowe</strong> - poprawione obliczenia VAT dla wielu produktów",
+        "<strong>Poprawki transakcji B2B</strong> - lepsze wykrywanie zamówień z 0% VAT",
+        "<strong>Optymalizacje</strong> - usunięto nieużywane funkcje i poprawiono wydajność"
+      ]
+    },
+    {
       "version": "1.09",
       "date": "15.09.2025",
       "changes": [
